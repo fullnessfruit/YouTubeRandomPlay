@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron')
+const { app, BrowserWindow, session } = require('electron')
 const path = require('path')
 
 function createWindow () {
@@ -15,6 +15,8 @@ function createWindow () {
 
   win.setMenu(null);
   win.loadFile('index.html')
+
+  session.defaultSession.clearCache();
 }
 
 app.whenReady().then(() => {
