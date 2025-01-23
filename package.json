@@ -1,0 +1,13 @@
+{
+  "name": "you_tube_random_play",
+  "version": "2.0.0",
+  "author": "your name",
+  "description": "YouTubeRandomPlay",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^13.1.7"
+  }
+}

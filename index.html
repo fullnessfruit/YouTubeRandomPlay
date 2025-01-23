@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Hello World!</title>
+    <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline';" />
+	<script src="EventHandler.js"></script>
+	<style>
+		html {
+			width: 100%;
+			height: 100%;
+		}
+
+		body {
+			width: 99%;
+			height: 98%;
+			display: flex;
+			flex-direction: row;
+		}
+		
+		#translationDivision {
+			width: 100%;
+			display: flex;
+			flex-direction: column;
+		}
+		
+		#addressDivision {
+			width: 100%;
+		}
+		
+		#textBoxAddress {
+			width: 100%;
+		}
+		
+		#translationBodyDivision {
+			flex: 1;
+		}
+		
+		#webViewTranslation {
+			width: 100%;
+			height: 100%;
+		}
+	</style>
+</head>
+<body onload="OnBodyLoad()">
+	<div id="translationDivision">
+		<div id="addressDivision">
+			<input id="textBoxAddress" value="about:blank">
+		</div>
+		<div id="translationBodyDivision">
+			<webview id="webViewTranslation" src="about:blank"></webview>
+		</div>
+	</div>
+</body>
+</html>
