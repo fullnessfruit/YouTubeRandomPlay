@@ -197,9 +197,7 @@ function OnWebViewTranslationDidFrameFinishLoad() {
 
 	if (play == false)
 	{
-		setTimeout(() => {
-			webViewTranslation.executeJavaScript("var elements = document.getElementsByClassName('yt-spec-button-shape-next yt-spec-button-shape-next--filled yt-spec-button-shape-next--overlay yt-spec-button-shape-next--size-m yt-spec-button-shape-next--icon-leading'); elements[0].click();");
-		}, 30000);
+		webViewTranslation.executeJavaScript("var elements = document.getElementsByClassName('yt-spec-button-shape-next yt-spec-button-shape-next--filled yt-spec-button-shape-next--overlay yt-spec-button-shape-next--size-m yt-spec-button-shape-next--icon-leading'); for (var i = 0; i < elements.length; i++) { elements[i].click(); }");
 		play = true;
 	}
 	else if (click == false)
