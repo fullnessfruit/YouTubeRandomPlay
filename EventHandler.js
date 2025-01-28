@@ -1,4 +1,5 @@
 const punycode = require('punycode');
+const crypto = require('crypto');
 const channelList = require('./ChannelList.js').ChannelList();
 const tlds_alpha_by_domain = require('./tlds-alpha-by-domain.js');
 
@@ -23,7 +24,7 @@ function OnBodyLoad() {
 function RandomPlay() {
 	play = false;
 	click = false;
-	webViewTranslation.loadURL(channelList[Math.floor(Math.random() * channelList.length)]);
+	webViewTranslation.loadURL(channelList[crypto.randomInt(channelList.length)]);
 
 	setTimeout(() => {
 		RandomPlay();
@@ -198,7 +199,7 @@ function OnWebViewTranslationDidFrameFinishLoad() {
 	{
 		setTimeout(() => {
 			webViewTranslation.executeJavaScript("var elements = document.getElementsByClassName('yt-spec-button-shape-next yt-spec-button-shape-next--filled yt-spec-button-shape-next--overlay yt-spec-button-shape-next--size-m yt-spec-button-shape-next--icon-leading'); elements[0].click();");
-		}, 20000);
+		}, 30000);
 		play = true;
 	}
 	else if (click == false)
