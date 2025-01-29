@@ -5,6 +5,7 @@ const tlds_alpha_by_domain = require('./tlds-alpha-by-domain.js');
 
 var topLevelDomainList = null;
 var play = false;
+var interval;
 var click = false;
 
 function OnBodyLoad() {
@@ -197,11 +198,14 @@ function OnWebViewTranslationDidFrameFinishLoad() {
 
 	if (play == false)
 	{
-		webViewTranslation.executeJavaScript("var elements = document.getElementsByClassName('yt-spec-button-shape-next yt-spec-button-shape-next--filled yt-spec-button-shape-next--overlay yt-spec-button-shape-next--size-m yt-spec-button-shape-next--icon-leading'); for (var i = 0; i < elements.length; i++) { elements[i].click(); }");
+		interval = setInterval(() => {
+			webViewTranslation.executeJavaScript("var elements = document.getElementsByClassName('yt-spec-button-shape-next yt-spec-button-shape-next--filled yt-spec-button-shape-next--overlay yt-spec-button-shape-next--size-m yt-spec-button-shape-next--icon-leading'); for (var i = 0; i < elements.length; i++) { elements[i].click(); }");
+		}, 1000);
 		play = true;
 	}
-	else if (click == false)
+	else if (webViewTranslation.getURL().startsWith("https://www.youtube.com/watch?") && click == false)
 	{
+		clearInterval(interval);
 		setTimeout(() => {
 			webViewTranslation.executeJavaScript("var elements = document.getElementsByClassName('yt-simple-endpoint style-scope ytd-playlist-panel-video-renderer'); elements[Math.floor(Math.random() * (elements.length / 10))].click();");
 		}, 60000);
