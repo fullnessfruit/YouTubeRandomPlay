@@ -203,13 +203,16 @@ function OnWebViewTranslationDidFrameFinishLoad() {
 		}, 1000);
 		play = true;
 	}
-	else if (webViewTranslation.getURL().startsWith("https://www.youtube.com/watch?") && click == false)
+	else if (webViewTranslation.getURL().startsWith("https://www.youtube.com/watch?"))
 	{
 		clearInterval(interval);
-		setTimeout(() => {
-			webViewTranslation.executeJavaScript("var elements = document.getElementsByClassName('yt-simple-endpoint style-scope ytd-playlist-panel-video-renderer'); elements[Math.floor(Math.random() * (elements.length / 10))].click();");
-		}, 60000);
-		click = true;
+		if (click == false)
+		{
+			setTimeout(() => {
+				webViewTranslation.executeJavaScript("var elements = document.getElementsByClassName('yt-simple-endpoint style-scope ytd-playlist-panel-video-renderer'); elements[Math.floor(Math.random() * (elements.length / 10))].click();");
+			}, 60000);
+			click = true;
+		}
 	}
 }
 
