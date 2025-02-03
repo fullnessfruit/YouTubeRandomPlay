@@ -185,6 +185,13 @@ function OnWebViewTranslationDidNavigate() {
 	const webViewTranslation = document.getElementById("webViewTranslation");
 
 	document.getElementById("textBoxAddress").value = webViewTranslation.getURL();
+	
+	if (play == false) {
+		intervalID.add(setInterval(() => {
+			webViewTranslation.executeJavaScript("var elements = document.getElementsByClassName('yt-spec-button-shape-next yt-spec-button-shape-next--filled yt-spec-button-shape-next--overlay yt-spec-button-shape-next--size-m yt-spec-button-shape-next--icon-leading'); for (var i = 0; i < elements.length; i++) { elements[i].click(); }");
+		}, 1000));
+		play = true;
+	}
 }
 
 function OnWebViewTranslationDidNavigateInPage() {
@@ -196,17 +203,13 @@ function OnWebViewTranslationDidNavigateInPage() {
 function OnWebViewTranslationDidFrameFinishLoad() {
 	const webViewTranslation = document.getElementById("webViewTranslation");
 
-	if (play == false) {
-		intervalID.add(setInterval(() => {
-			webViewTranslation.executeJavaScript("var elements = document.getElementsByClassName('yt-spec-button-shape-next yt-spec-button-shape-next--filled yt-spec-button-shape-next--overlay yt-spec-button-shape-next--size-m yt-spec-button-shape-next--icon-leading'); for (var i = 0; i < elements.length; i++) { elements[i].click(); }");
-		}, 1000));
-		play = true;
-	}
-	else if (webViewTranslation.getURL().startsWith("https://www.youtube.com/watch?"))
+	if (webViewTranslation.getURL().startsWith("https://www.youtube.com/watch?"))
 	{
 		for (const i of intervalID) {
 			clearInterval(i);
 		}
+		intervalID.clear();
+
 		if (click == false) {
 			setTimeout(() => {
 				webViewTranslation.executeJavaScript("var elements = document.getElementsByClassName('yt-simple-endpoint style-scope ytd-playlist-panel-video-renderer'); elements[Math.floor(Math.random() * (elements.length / 10))].click();");
