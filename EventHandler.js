@@ -192,6 +192,20 @@ function OnWebViewTranslationDidNavigate() {
 		}, 1000));
 		play = true;
 	}
+	
+	if (click == true) {
+		for (const i of intervalID) {
+			clearInterval(i);
+		}
+		intervalID.clear();
+
+		if (click == false) {
+			setTimeout(() => {
+				webViewTranslation.executeJavaScript("var elements = document.getElementsByClassName('yt-simple-endpoint style-scope ytd-playlist-panel-video-renderer'); elements[Math.floor(Math.random() * (elements.length / 10))].click();");
+			}, 60000);
+			click = true;
+		}
+	}
 }
 
 function OnWebViewTranslationDidNavigateInPage() {
@@ -203,8 +217,12 @@ function OnWebViewTranslationDidNavigateInPage() {
 function OnWebViewTranslationDidFrameFinishLoad() {
 	const webViewTranslation = document.getElementById("webViewTranslation");
 
-	if (webViewTranslation.getURL().startsWith("https://www.youtube.com/watch?"))
-	{
+	if (play == false) {
+		click = true;
+		return;
+	}
+	
+	if (webViewTranslation.getURL().startsWith("https://www.youtube.com/watch?")) {
 		for (const i of intervalID) {
 			clearInterval(i);
 		}
