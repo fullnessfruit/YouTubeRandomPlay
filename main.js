@@ -3,8 +3,8 @@ const path = require('path')
 
 function createWindow () {
   const win = new BrowserWindow({
-    width: 1710,
-    height: 1105,
+    width: 527,
+    height: 407,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: true,
@@ -15,7 +15,7 @@ function createWindow () {
 
   win.setMenu(null);
   win.loadFile('index.html')
-
+  
   session.defaultSession.clearCache();
 }
 
