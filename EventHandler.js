@@ -9,10 +9,12 @@ var intervalID = new Set();
 var click = false;
 
 function OnBodyLoad() {
+	const webViewTranslation = document.getElementById("webViewTranslation");
+
 	document.getElementById("textBoxAddress").addEventListener("keydown", OnTextBoxAddressKeyDown);
-	document.getElementById("webViewTranslation").addEventListener("did-navigate", OnWebViewTranslationDidNavigate);
-	document.getElementById("webViewTranslation").addEventListener("did-navigate-in-page", OnWebViewTranslationDidNavigateInPage);
-	document.getElementById("webViewTranslation").addEventListener("did-frame-finish-load", OnWebViewTranslationDidFrameFinishLoad);
+	webViewTranslation.addEventListener("did-navigate", OnWebViewTranslationDidNavigate);
+	webViewTranslation.addEventListener("did-navigate-in-page", OnWebViewTranslationDidNavigateInPage);
+	webViewTranslation.addEventListener("did-frame-finish-load", OnWebViewTranslationDidFrameFinishLoad);
 
 	// top level domain 목록을 매번 직접 다운 받는 것은 왠지 네트워크 자원 낭비 같기도 하고, 굳이 매번 갱신할 필요는 없을 것 같으므로 tlds-alpha-by-domain.js 로 만들었다.
 	topLevelDomainList = tlds_alpha_by_domain.TLDsAlphaByDomain();
@@ -25,7 +27,7 @@ function OnBodyLoad() {
 function RandomPlay() {
 	play = false;
 	click = false;
-	webViewTranslation.loadURL(channelList[crypto.randomInt(channelList.length)]);
+	document.getElementById("webViewTranslation").loadURL(channelList[crypto.randomInt(channelList.length)]);
 
 	setTimeout(() => {
 		RandomPlay();
@@ -185,6 +187,7 @@ function OnWebViewTranslationDidNavigate() {
 	const webViewTranslation = document.getElementById("webViewTranslation");
 
 	document.getElementById("textBoxAddress").value = webViewTranslation.getURL();
+	webViewTranslation.setAudioMuted(true);
 	
 	if (play == false) {
 		intervalID.add(setInterval(() => {
@@ -212,6 +215,20 @@ function OnWebViewTranslationDidNavigateInPage() {
 	const webViewTranslation = document.getElementById("webViewTranslation");
 
 	document.getElementById("textBoxAddress").value = webViewTranslation.getURL();
+	
+	if (click == true) {
+		for (const i of intervalID) {
+			clearInterval(i);
+		}
+		intervalID.clear();
+
+		if (click == false) {
+			setTimeout(() => {
+				webViewTranslation.executeJavaScript("var elements = document.getElementsByClassName('yt-simple-endpoint style-scope ytd-playlist-panel-video-renderer'); elements[Math.floor(Math.random() * (elements.length / 10))].click();");
+			}, 60000);
+			click = true;
+		}
+	}
 }
 
 function OnWebViewTranslationDidFrameFinishLoad() {
