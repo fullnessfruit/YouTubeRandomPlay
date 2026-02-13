@@ -1,7 +1,42 @@
 const punycode = require('punycode');
 const crypto = require('crypto');
-const channelList = require('./ChannelList.js').ChannelList();
+const fs = require('fs');
+const path = require('path');
 const tlds_alpha_by_domain = require('./tlds-alpha-by-domain.js');
+
+const channelListFiles = [
+	'./ChannelList.js',
+	'./ChannelList_l_h.js',
+	'./ChannelList_l_n.js',
+	'./ChannelList_l_u.js'
+];
+const recordFilePath = path.join(__dirname, 'channel_record.json');
+
+function getChannelListForToday() {
+	var record = { date: null, index: -1 };
+
+	try {
+		record = JSON.parse(fs.readFileSync(recordFilePath, 'utf8'));
+	}
+	catch {
+	}
+
+	var today = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+
+	if (record.date === today) {
+		// 오늘 이미 기록이 있으면 그 인덱스의 파일을 사용한다.
+		return require(channelListFiles[record.index]).ChannelList();
+	}
+
+	// 오늘 처음 실행이면 다음 인덱스로 넘어간다.
+	var nextIndex = (record.index + 1) % channelListFiles.length;
+
+	fs.writeFileSync(recordFilePath, JSON.stringify({ date: today, index: nextIndex }), 'utf8');
+
+	return require(channelListFiles[nextIndex]).ChannelList();
+}
+
+const channelList = getChannelListForToday();
 
 var topLevelDomainList = null;
 var play = false;
