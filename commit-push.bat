@@ -12,8 +12,6 @@ if not exist .git (
     exit /b 1
 )
 
-git remote set-url origin "%REMOTE_URL%" 2> nul || git remote add origin "%REMOTE_URL%"
-
 echo === Changed files ===
 git status -s
 echo.
@@ -57,7 +55,10 @@ git -c user.name="%GIT_USER_NAME%" -c user.email="%GIT_USER_EMAIL%" commit -m "%
 
 :do_push
 echo.
+set CLEAN_URL=https://github.com/%GITHUB_REPO%.git
+git remote set-url origin "%REMOTE_URL%" 2> nul
 git push -u origin main
+git remote set-url origin "%CLEAN_URL%"
 pause
 exit /b 0
 
