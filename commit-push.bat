@@ -31,6 +31,12 @@ echo === Staged ===
 git diff --cached --stat
 echo.
 
+git diff --cached --quiet 2> nul
+if not errorlevel 1 (
+    echo Nothing staged. Pushing only.
+    goto do_push
+)
+
 call commit-msg.bat
 
 if "%COMMIT_MSG%"=="" (
