@@ -102,3 +102,15 @@ dist
 
 # TernJS port file
 .tern-port
+
+# Project-specific
+git-config.bat
+commit-msg.bat
+channel_record.json
+ChannelList_l_h.js
+ChannelList_l_n.js
+ChannelList_l_u.js
+package_l.json
+package_l_h.json
+package_l_n.json
+package_l_u.json

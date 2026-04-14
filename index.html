@@ -6,46 +6,163 @@
     <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline';" />
 	<script src="EventHandler.js"></script>
 	<style>
-		html {
+		html, body {
+			width: 100%;
+			height: 100%;
+			margin: 0;
+			padding: 0;
+			overflow: hidden;
+		}
+
+		#translationDivision {
+			width: 100%;
+			height: 100%;
+			display: flex;
+			flex-direction: column;
+		}
+
+		/* Custom title bar */
+		#titleBar {
+			display: flex;
+			height: 30px;
+			background: #e0e0e0;
+			-webkit-app-region: drag;
+			align-items: center;
+			flex-shrink: 0;
+		}
+
+		#titleBar .title-text {
+			flex: 1;
+			padding-left: 8px;
+			font-size: 12px;
+			color: #333;
+		}
+
+		#titleBar .window-controls {
+			display: flex;
+			-webkit-app-region: no-drag;
+		}
+
+		#titleBar .window-controls button {
+			width: 46px;
+			height: 30px;
+			border: none;
+			background: transparent;
+			color: #333;
+			font-size: 12px;
+			cursor: pointer;
+			padding: 0;
+		}
+
+		#titleBar .window-controls button:hover {
+			background: #c0c0c0;
+		}
+
+		#titleBar .window-controls .close-btn:hover {
+			background: #e81123;
+			color: white;
+		}
+
+		/* Address bar */
+		#addressDivision {
+			width: 100%;
+			padding: 2px 0;
+			flex-shrink: 0;
+		}
+
+		#textBoxAddress {
+			width: 100%;
+		}
+
+		/* PIP mode top bar */
+		#pipBar {
+			display: none;
+			height: 20px;
+			background: rgba(30, 30, 30, 0.85);
+			-webkit-app-region: drag;
+			align-items: center;
+			justify-content: flex-end;
+			flex-shrink: 0;
+		}
+
+		#pipExitBtn {
+			-webkit-app-region: no-drag;
+			width: 32px;
+			height: 20px;
+			border: none;
+			background: transparent;
+			color: #aaa;
+			font-size: 14px;
+			cursor: pointer;
+			padding: 0;
+			line-height: 20px;
+			text-align: center;
+		}
+
+		#pipExitBtn:hover {
+			background: #555;
+			color: white;
+		}
+
+		#pipCloseBtn {
+			-webkit-app-region: no-drag;
+			width: 32px;
+			height: 20px;
+			border: none;
+			background: transparent;
+			color: #aaa;
+			font-size: 14px;
+			cursor: pointer;
+			padding: 0;
+			line-height: 20px;
+			text-align: center;
+		}
+
+		#pipCloseBtn:hover {
+			background: #e81123;
+			color: white;
+		}
+
+		#translationBodyDivision {
+			flex: 1;
+		}
+
+		#webViewTranslation {
 			width: 100%;
 			height: 100%;
 		}
 
-		body {
-			width: 99%;
-			height: 98%;
+		/* PIP mode */
+		body.pip-mode #titleBar {
+			display: none;
+		}
+
+		body.pip-mode #addressDivision {
+			display: none;
+		}
+
+		body.pip-mode #pipBar {
 			display: flex;
-			flex-direction: row;
-		}
-		
-		#translationDivision {
-			width: 100%;
-			display: flex;
-			flex-direction: column;
-		}
-		
-		#addressDivision {
-			width: 100%;
-		}
-		
-		#textBoxAddress {
-			width: 100%;
-		}
-		
-		#translationBodyDivision {
-			flex: 1;
-		}
-		
-		#webViewTranslation {
-			width: 100%;
-			height: 100%;
 		}
 	</style>
 </head>
 <body onload="OnBodyLoad()">
 	<div id="translationDivision">
+		<div id="titleBar">
+			<span class="title-text"></span>
+			<div class="window-controls">
+				<button id="pipEnterBtn" title="PIP Mode">⛶</button>
+				<button id="minBtn" title="Minimize">─</button>
+				<button id="maxBtn" title="Maximize">□</button>
+				<button class="close-btn" id="closeBtn" title="Close">✕</button>
+			</div>
+		</div>
 		<div id="addressDivision">
 			<input id="textBoxAddress" value="about:blank">
+		</div>
+		<div id="pipBar">
+			<button id="pipExitBtn" title="Exit PIP">⛶</button>
+			<button id="pipCloseBtn" title="Close">✕</button>
 		</div>
 		<div id="translationBodyDivision">
 			<webview id="webViewTranslation" src="about:blank"></webview>

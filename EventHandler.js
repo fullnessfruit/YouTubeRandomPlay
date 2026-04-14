@@ -2,6 +2,7 @@ const punycode = require('punycode');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { ipcRenderer } = require('electron');
 const tlds_alpha_by_domain = require('./tlds-alpha-by-domain.js');
 
 const channelListFiles = [
@@ -24,11 +25,11 @@ function getChannelListForToday() {
 	var today = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
 
 	if (record.date === today) {
-		// 오늘 이미 기록이 있으면 그 인덱스의 파일을 사용한다.
+		// Already recorded today — use the same index
 		return require(channelListFiles[record.index]).ChannelList();
 	}
 
-	// 오늘 처음 실행이면 다음 인덱스로 넘어간다.
+	// First run today — advance to the next index
 	var nextIndex = (record.index + 1) % channelListFiles.length;
 
 	fs.writeFileSync(recordFilePath, JSON.stringify({ date: today, index: nextIndex }), 'utf8');
@@ -38,10 +39,16 @@ function getChannelListForToday() {
 
 const channelList = getChannelListForToday();
 
+const logFile = path.join(__dirname, 'debug.log');
+function log(msg) {
+	fs.appendFileSync(logFile, `[${new Date().toISOString()}] ${msg}\n`);
+}
+
 var topLevelDomainList = null;
 var play = false;
 var intervalID = new Set();
 var click = false;
+var randomPlayTimeoutID = null;
 
 function OnBodyLoad() {
 	const webViewTranslation = document.getElementById("webViewTranslation");
@@ -50,8 +57,23 @@ function OnBodyLoad() {
 	webViewTranslation.addEventListener("did-navigate", OnWebViewTranslationDidNavigate);
 	webViewTranslation.addEventListener("did-navigate-in-page", OnWebViewTranslationDidNavigateInPage);
 	webViewTranslation.addEventListener("did-frame-finish-load", OnWebViewTranslationDidFrameFinishLoad);
+	webViewTranslation.addEventListener("crashed", () => {
+		log('⚠️ webview crashed - restarting RandomPlay');
+		RandomPlay();
+	});
 
-	// top level domain 목록을 매번 직접 다운 받는 것은 왠지 네트워크 자원 낭비 같기도 하고, 굳이 매번 갱신할 필요는 없을 것 같으므로 tlds-alpha-by-domain.js 로 만들었다.
+	document.getElementById("pipEnterBtn").addEventListener("click", () => { ipcRenderer.send('toggle-pip'); });
+	document.getElementById("pipExitBtn").addEventListener("click", () => { ipcRenderer.send('toggle-pip'); });
+	document.getElementById("pipCloseBtn").addEventListener("click", () => { ipcRenderer.send('window-close'); });
+	document.getElementById("minBtn").addEventListener("click", () => { ipcRenderer.send('window-minimize'); });
+	document.getElementById("maxBtn").addEventListener("click", () => { ipcRenderer.send('window-maximize'); });
+	document.getElementById("closeBtn").addEventListener("click", () => { ipcRenderer.send('window-close'); });
+
+	ipcRenderer.on('pip-changed', (event, isPip) => {
+		document.body.classList.toggle('pip-mode', isPip);
+	});
+
+	// TLD list is bundled as tlds-alpha-by-domain.js to avoid fetching it from the network every time
 	topLevelDomainList = tlds_alpha_by_domain.TLDsAlphaByDomain();
 
 	setTimeout(() => {
@@ -60,11 +82,14 @@ function OnBodyLoad() {
 }
 
 function RandomPlay() {
+	if (randomPlayTimeoutID !== null) {
+		clearTimeout(randomPlayTimeoutID);
+	}
 	play = false;
 	click = false;
 	document.getElementById("webViewTranslation").loadURL(channelList[crypto.randomInt(channelList.length)]);
 
-	setTimeout(() => {
+	randomPlayTimeoutID = setTimeout(() => {
 		RandomPlay();
 	}, 3600000);
 }
@@ -80,7 +105,7 @@ async function OnTextBoxAddressKeyDown(event) {
 
 	const textBoxAddressValue = document.getElementById("textBoxAddress").value.trim();
 
-	// 아무것도 입력되지 않은 경우
+	// Empty input
 	if (!textBoxAddressValue) {
 		return;
 	}
@@ -88,18 +113,18 @@ async function OnTextBoxAddressKeyDown(event) {
 	const webViewTranslation = document.getElementById("webViewTranslation");
 
 	try {
-		// 온전한 URI 형태로 입력되었다면 성공한다.
+		// Try loading as a complete URI
 		await webViewTranslation.loadURL(textBoxAddressValue);
 	}
 	catch {
 		try {
-			// 맨 첫 글자가 ?인 경우에는 그 뒤의 단어를 검색어로 간주하고 구글 일본어 검색을 한다.
+			// Leading '?' means treat the rest as a Google search query
 			if (textBoxAddressValue.startsWith("?")) {
 				await webViewTranslation.loadURL("https://www.google.com/search?q=" + encodeURIComponent(textBoxAddressValue.substring(1).trimStart()));
 				return;
 			}
 
-			// 입력된 문자열을 프로토콜이 HTTP인 URI라고 간주하고 도메인 부분만 분리한다.
+			// Assume HTTP protocol and extract the domain part
 			var url = new URL("http://" + textBoxAddressValue);
 			var hostAndPort = url.host.split(':');
 			var lastIndexOfColon = url.host.lastIndexOf(':');
@@ -131,7 +156,7 @@ async function OnTextBoxAddressKeyDown(event) {
 				}
 			}
 
-			// 호스트가 IPv4 또는 IPv4와 포트로 이루어져 있는 경우를 처리한다.
+			// Handle host as IPv4 or IPv4:port
 			if (hostAndPort.length <= IP_AND_PORT_COUNT)
 			{
 				var valid16BitInteger = true;
@@ -179,15 +204,15 @@ async function OnTextBoxAddressKeyDown(event) {
 				}
 			}
 
-			// 도메인의 맨 마지막이 top level domain 중 하나라면, 입력된 문자열을 프로토콜이 HTTP인 URI로 간주한다. top level domain은 언제라도 추가될 수 있기 때문에 직접 확인한다.
+			// If the last part of the domain matches a known TLD, treat the input as an HTTP URI. TLDs are checked directly since new ones can be added at any time.
 			if (Array.isArray(topLevelDomainList)) {
-				// 국제화 도메인일 수도 있으므로 도메인의 맨 마지막을 퓨니코드로 인코딩한다.
-				// Javascript 자체에는 퓨니코드를 인코딩하는 라이브러리가 없는 것 같고 https://github.com/bestiejs/punycode.js 이걸 MIT 라이센스로 사용해야 하는 것 같다.
+				// Internationalized domains may need Punycode encoding
+				// Using https://github.com/bestiejs/punycode.js (MIT license)
 				// var punycodeDomain = punycode.encode(domain[domain.length - 1]);
 				var punycodeDomain = domain[domain.length - 1];
 
 				for (var i = 0; i < topLevelDomainList.length; i++) {
-					// top level domain 목록의 맨 첫 줄은 무시한다.
+					// Skip the header line in the TLD list
 					if (topLevelDomainList[i].trimStart().startsWith("#")) {
 						continue;
 					}
@@ -199,7 +224,7 @@ async function OnTextBoxAddressKeyDown(event) {
 				}
 			}
 
-			// top level domain 목록을 로드하는데 실패했다면 입력된 문자열을 DNS에 질의해 도메인이 존재하는지에 대한 여부를 확인해야 한다. 그리고 top level domain 목록을 로드하는데 성공한 경우, 일반적인 환경에서는 여기까지 왔다면 입력된 문자열이 URI인 경우가 거의 없겠지만, 만약 자체적으로 네임 서버와 도메인을 만들어서 사용하는 환경이라면 URI일 수도 있으므로 DNS 질의는 무조건 할 수밖에 없다. 하지만 입력된 문자열이 URI가 아니라 검색어인 경우, DNS 질의 결과가 온 후에 검색을 진행하면 검색 결과가 나올 때까지 오래 기다리게 된다. 따라서 DNS 질의는 비동기로 하고 질의 결과가 오기 전에 구글 일본어 검색도 동시에 진행한다.
+			// Always attempt async DNS lookup (covers custom nameserver/domain setups). Run a Google search concurrently to avoid perceived delay when the input is actually a search query.
 			TryAsURI(url);
 			try {
 				await webViewTranslation.loadURL("https://www.google.com/search?q=" + encodeURIComponent(textBoxAddressValue));
@@ -208,7 +233,7 @@ async function OnTextBoxAddressKeyDown(event) {
 			}
 		}
 		catch {
-			// 입력된 문자열을 프로토콜이 HTTP인 URI로 만드는데 실패했다거나, 빈 문자열을 퓨니코드로 인코딩하려고 시도하다 예외가 발생했다거나 하는 등의 경우에는, 입력된 문자열을 검색어로 간주하고 구글 일본어 검색을 한다.
+			// Fallback: URL construction or Punycode encoding failed — treat input as a search query
 			try {
 				await webViewTranslation.loadURL("https://www.google.com/search?q=" + encodeURIComponent(textBoxAddressValue));
 			}
@@ -223,7 +248,8 @@ function OnWebViewTranslationDidNavigate() {
 
 	document.getElementById("textBoxAddress").value = webViewTranslation.getURL();
 	webViewTranslation.setAudioMuted(true);
-	
+	webViewTranslation.insertCSS('ytd-topbar-logo-renderer, ytd-button-renderer.style-scope.ytd-masthead { display: none !important; }');
+
 	if (play == false) {
 		intervalID.add(setInterval(() => {
 			webViewTranslation.executeJavaScript("var elements = document.getElementsByClassName('yt-spec-button-shape-next yt-spec-button-shape-next--filled yt-spec-button-shape-next--overlay yt-spec-button-shape-next--size-m yt-spec-button-shape-next--icon-leading'); for (var i = 0; i < elements.length; i++) { elements[i].click(); }");
@@ -289,7 +315,7 @@ function OnWebViewTranslationDidFrameFinishLoad() {
 	}
 }
 
-// URI의 도메인 부분을 DNS에 질의해 도메인이 존재하는지에 대한 여부를 비동기로 확인한 후 존재하면 해당 웹 페이지를 로드한다.
+// Async DNS lookup on the domain; if it resolves, load the page
 async function TryAsURI(url) {
 	try {
 		const webViewTranslation = document.getElementById("webViewTranslation");
