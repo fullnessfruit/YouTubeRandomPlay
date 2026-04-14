@@ -107,6 +107,7 @@ dist
 git-config.bat
 commit-msg.bat
 channel_record.json
+Document.md
 ChannelList_l_h.js
 ChannelList_l_n.js
 ChannelList_l_u.js
