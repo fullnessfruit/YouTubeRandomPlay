@@ -54,6 +54,11 @@ if /i "!ADD_FILE!"=="y" git add "%~1"
 goto :eof
 
 :review_modified
+git check-ignore --no-index -q "%~1"
+if not errorlevel 1 (
+    echo === %~1 [gitignored - skipped] ===
+    goto :eof
+)
 echo.
 echo === %~1 ===
 git diff "%~1"

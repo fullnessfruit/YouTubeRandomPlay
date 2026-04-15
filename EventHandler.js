@@ -248,7 +248,8 @@ function OnWebViewTranslationDidNavigate() {
 
 	document.getElementById("textBoxAddress").value = webViewTranslation.getURL();
 	webViewTranslation.setAudioMuted(true);
-	webViewTranslation.insertCSS('ytd-topbar-logo-renderer, ytd-button-renderer.style-scope.ytd-masthead { display: none !important; }');
+	// Match the create button by its localized aria-label to avoid hiding the avatar button area
+	webViewTranslation.insertCSS('ytd-topbar-logo-renderer, ytd-masthead button[aria-label="作成"], ytd-masthead button[aria-label="Create"], ytd-masthead button[aria-label="만들기"] { display: none !important; }');
 
 	if (play == false) {
 		intervalID.add(setInterval(() => {
