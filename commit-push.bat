@@ -57,7 +57,8 @@ git -c user.name="%GIT_USER_NAME%" -c user.email="%GIT_USER_EMAIL%" commit -m "%
 echo.
 set CLEAN_URL=https://github.com/%GITHUB_REPO%.git
 git remote set-url origin "%REMOTE_URL%" 2> nul
-git push -u origin main
+rem Disable all credential helpers for this push so the PAT is not saved to Windows Credential Manager
+git -c credential.helper= push -u origin main
 git remote set-url origin "%CLEAN_URL%"
 pause
 exit /b 0

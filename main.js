@@ -37,6 +37,24 @@ function createWindow () {
 
   win.setMenu(null);
   win.loadFile('index.html')
+    .catch((err) => { log(`❌ loadFile rejected - error: ${err && err.message ? err.message : err}`); });
+
+  // Forward renderer error-level console messages to debug.log (level 3 only; levels: 0=verbose, 1=info, 2=warning, 3=error)
+  win.webContents.on('console-message', (event, level, message, line, sourceId) => {
+    if (level === 3) {
+      log(`🖥 renderer console error - source: ${sourceId}:${line}, msg: ${message}`);
+    }
+  });
+
+  win.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    log(`❌ did-fail-load - code: ${errorCode}, desc: ${errorDescription}, url: ${validatedURL}, mainFrame: ${isMainFrame}`);
+  });
+  win.webContents.on('preload-error', (event, preloadPath, error) => {
+    log(`❌ preload-error - path: ${preloadPath}, error: ${error && error.message ? error.message : error}`);
+  });
+  win.webContents.on('render-process-gone', (event, details) => {
+    log(`❌ render-process-gone - reason: ${details.reason}, exitCode: ${details.exitCode}`);
+  });
 
   // Notify renderer of PIP mode after load
   win.webContents.on('did-finish-load', () => {

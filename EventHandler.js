@@ -1,3 +1,24 @@
+// Define log() before any require/top-level code so a module-load throw cannot leave later
+// references in a TDZ state. `var` is used intentionally for hoist-safety.
+var log;
+try {
+	const _fs = require('fs');
+	const _path = require('path');
+	const _logFile = _path.join(__dirname, 'debug.log');
+	log = (msg) => { _fs.appendFileSync(_logFile, `[${new Date().toISOString()}] ${msg}\n`); };
+}
+catch (e) {
+	log = () => {};
+}
+
+// Surface any uncaught renderer errors to debug.log
+window.addEventListener('error', (event) => {
+	log(`💥 window error - msg: ${event.message}, src: ${event.filename}:${event.lineno}:${event.colno}, error: ${event.error && event.error.stack ? event.error.stack : event.error}`);
+});
+window.addEventListener('unhandledrejection', (event) => {
+	log(`💥 window unhandledrejection - reason: ${event.reason && event.reason.stack ? event.reason.stack : event.reason}`);
+});
+
 const punycode = require('punycode');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -38,11 +59,6 @@ function getChannelListForToday() {
 }
 
 const channelList = getChannelListForToday();
-
-const logFile = path.join(__dirname, 'debug.log');
-function log(msg) {
-	fs.appendFileSync(logFile, `[${new Date().toISOString()}] ${msg}\n`);
-}
 
 var topLevelDomainList = null;
 var play = false;
@@ -87,9 +103,21 @@ function RandomPlay() {
 	}
 	play = false;
 	click = false;
-	document.getElementById("webViewTranslation").loadURL(channelList[crypto.randomInt(channelList.length)]);
+
+	const randomIndex = crypto.randomInt(channelList.length);
+	const selectedUrl = channelList[randomIndex];
+	log(`🎲 RandomPlay - index: ${randomIndex}, url: ${selectedUrl}`);
+
+	const webViewTranslation = document.getElementById("webViewTranslation");
+	const loadPromise = webViewTranslation.loadURL(selectedUrl);
+	if (loadPromise && typeof loadPromise.then === 'function') {
+		loadPromise.catch((err) => {
+			log(`❌ RandomPlay loadURL rejected - url: ${selectedUrl}, error: ${err && err.message ? err.message : err}`);
+		});
+	}
 
 	randomPlayTimeoutID = setTimeout(() => {
+		log(`⏰ RandomPlay 1-hour timer fired`);
 		RandomPlay();
 	}, 3600000);
 }
