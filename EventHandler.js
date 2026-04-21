@@ -253,7 +253,7 @@ function OnWebViewTranslationDidNavigate() {
 
 	if (play == false) {
 		intervalID.add(setInterval(() => {
-			webViewTranslation.executeJavaScript("var elements = document.getElementsByClassName('yt-spec-button-shape-next yt-spec-button-shape-next--filled yt-spec-button-shape-next--overlay yt-spec-button-shape-next--size-m yt-spec-button-shape-next--icon-leading'); for (var i = 0; i < elements.length; i++) { elements[i].click(); }");
+			webViewTranslation.executeJavaScript("var elements = document.querySelectorAll('ytd-playlist-header-renderer .play-button a'); for (var i = 0; i < elements.length; i++) { elements[i].click(); }");
 		}, 1000));
 		play = true;
 	}
