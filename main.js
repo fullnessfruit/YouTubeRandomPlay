@@ -12,6 +12,64 @@ function log(msg) {
   fs.appendFileSync(logFile, line)
 }
 
+// Channel rotation drives Electron's `name` field (and thus the userData path / Google
+// session directory). On each launch we rotate the index if the date changed, then verify
+// package.json matches the target template's `name`. A mismatch triggers a copy + relaunch
+// so the next instance boots with the correct identity. The relaunch is required because
+// userData is resolved once during app initialization and cannot be changed at runtime.
+const channelListSlotCount = 4;
+const packageTemplates = ['package_l.json', 'package_l_h.json', 'package_l_n.json', 'package_l_u.json'];
+const recordFilePath = path.join(__dirname, 'channel_record.json');
+const packagePath = path.join(__dirname, 'package.json');
+
+function ensureCorrectPackageJson() {
+  let record = { date: null, index: -1 };
+  try {
+    record = JSON.parse(fs.readFileSync(recordFilePath, 'utf8'));
+  } catch {}
+
+  const today = new Date().toISOString().slice(0, 10);
+  let targetIndex;
+
+  if (record.date === today) {
+    targetIndex = record.index;
+  } else {
+    targetIndex = (record.index + 1) % channelListSlotCount;
+    fs.writeFileSync(recordFilePath, JSON.stringify({ date: today, index: targetIndex }), 'utf8');
+    log(`📅 channel rotation - date: ${today}, index: ${targetIndex}`);
+  }
+
+  const templatePath = path.join(__dirname, packageTemplates[targetIndex]);
+  let templateName, currentName;
+  try {
+    templateName = JSON.parse(fs.readFileSync(templatePath, 'utf8')).name;
+  } catch (e) {
+    log(`⚠️ package template read failed - path: ${templatePath}, error: ${e && e.message ? e.message : e}`);
+    return false;
+  }
+  try {
+    currentName = JSON.parse(fs.readFileSync(packagePath, 'utf8')).name;
+  } catch (e) {
+    log(`⚠️ current package.json read failed - error: ${e && e.message ? e.message : e}`);
+    return false;
+  }
+
+  if (templateName === currentName) {
+    return false;
+  }
+
+  log(`🔄 package.json swap - from: ${currentName}, to: ${templateName}, template: ${packageTemplates[targetIndex]}, index: ${targetIndex}`);
+  fs.copyFileSync(templatePath, packagePath);
+  return true;
+}
+
+if (ensureCorrectPackageJson()) {
+  log('🔁 relaunching after package.json swap');
+  app.relaunch();
+  app.exit(0);
+}
+// app.exit terminates immediately; code below only runs when no swap was needed.
+
 let win;
 let normalBounds = null;
 let isPip = true;

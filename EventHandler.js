@@ -34,28 +34,11 @@ const channelListFiles = [
 ];
 const recordFilePath = path.join(__dirname, 'channel_record.json');
 
+// Rotation and package.json identity are owned by main.js; it writes channel_record.json
+// before the renderer starts. Here we just read the index it already committed.
 function getChannelListForToday() {
-	var record = { date: null, index: -1 };
-
-	try {
-		record = JSON.parse(fs.readFileSync(recordFilePath, 'utf8'));
-	}
-	catch {
-	}
-
-	var today = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
-
-	if (record.date === today) {
-		// Already recorded today — use the same index
-		return require(channelListFiles[record.index]).ChannelList();
-	}
-
-	// First run today — advance to the next index
-	var nextIndex = (record.index + 1) % channelListFiles.length;
-
-	fs.writeFileSync(recordFilePath, JSON.stringify({ date: today, index: nextIndex }), 'utf8');
-
-	return require(channelListFiles[nextIndex]).ChannelList();
+	const record = JSON.parse(fs.readFileSync(recordFilePath, 'utf8'));
+	return require(channelListFiles[record.index]).ChannelList();
 }
 
 const channelList = getChannelListForToday();
