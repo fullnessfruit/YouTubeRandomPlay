@@ -71,7 +71,6 @@ if (ensureCorrectPackageJson()) {
 // app.exit terminates immediately; code below only runs when no swap was needed.
 
 let win;
-let normalBounds = null;
 let isPip = true;
 
 function createWindow () {
@@ -140,21 +139,14 @@ ipcMain.on('toggle-pip', () => {
   if (!win) return;
 
   if (isPip) {
-    // PIP → Normal
+    // PIP → Normal: drop always-on-top but keep the current window size
     isPip = false;
     win.setAlwaysOnTop(false);
-    if (normalBounds) {
-      win.setBounds(normalBounds);
-    } else {
-      win.setBounds({ width: 527, height: 407 });
-    }
     log(`toggle-pip → normal - bounds: ${JSON.stringify(win.getBounds())}`);
   } else {
-    // Normal → PIP
-    normalBounds = win.getBounds();
+    // Normal → PIP: restore always-on-top but keep the current window size
     isPip = true;
     win.setAlwaysOnTop(true, 'screen-saver');
-    win.setBounds({ width: 320, height: 180 });
     log(`toggle-pip → pip - bounds: ${JSON.stringify(win.getBounds())}`);
   }
 
