@@ -48,6 +48,9 @@ var play = false;
 var intervalID = new Set();
 var click = false;
 var randomPlayTimeoutID = null;
+var endCheckIntervalID = null;
+var lastNavigatedUrl = null;
+var sameUrlNavCount = 0;
 
 function OnBodyLoad() {
 	const webViewTranslation = document.getElementById("webViewTranslation");
@@ -84,6 +87,10 @@ function RandomPlay() {
 	if (randomPlayTimeoutID !== null) {
 		clearTimeout(randomPlayTimeoutID);
 	}
+	if (endCheckIntervalID !== null) {
+		clearInterval(endCheckIntervalID);
+		endCheckIntervalID = null;
+	}
 	play = false;
 	click = false;
 
@@ -103,6 +110,45 @@ function RandomPlay() {
 		log(`⏰ RandomPlay 1-hour timer fired`);
 		RandomPlay();
 	}, 3600000);
+}
+
+// Click a random video from the front portion of the watch-page playlist sidebar.
+// divisor controls the slice: 20 = front 5%, 10 = front 10%.
+function clickRandomFrontVideo(divisor) {
+	const webViewTranslation = document.getElementById("webViewTranslation");
+	webViewTranslation.executeJavaScript(
+		"var elements = document.getElementsByClassName('yt-simple-endpoint style-scope ytd-playlist-panel-video-renderer'); if (elements.length) { elements[Math.floor(Math.random() * (elements.length / " + divisor + "))].click(); }"
+	);
+}
+
+// Detect when the first played video reaches its natural end, then pick a random front-5% video.
+// Uses the standard HTML5 media API (more stable than YouTube's internal player API). Robust against
+// playlist autoplay: a capture-phase 'ended' listener on the main player's <video> sets a sticky flag
+// (media events do not bubble, so capture is required, and the flag survives the brief autoplay
+// transition before the next video starts). A direct '#movie_player video'.ended read is the fallback
+// for the already-ended case. Ad playback is excluded via the '.ad-showing' guard, and the listener is
+// scoped to '#movie_player' so hover-preview/mini-player <video> elements do not trigger it. Polled from
+// the host since the webview has no preload IPC bridge.
+function startFirstVideoEndDetection() {
+	const webViewTranslation = document.getElementById("webViewTranslation");
+	const pollScript = "(function(){if(!window.__ytEndHook){window.__ytEndHook=true;window.__ytEnded=false;document.addEventListener('ended',function(e){var t=e.target;if(t&&t.tagName==='VIDEO'&&t.closest('#movie_player')&&!document.querySelector('.ad-showing')){window.__ytEnded=true;}},true);}if(window.__ytEnded)return true;var v=document.querySelector('#movie_player video');if(v&&v.ended&&!document.querySelector('.ad-showing'))return true;return false;})()";
+	let handled = false;
+
+	endCheckIntervalID = setInterval(() => {
+		webViewTranslation.executeJavaScript(pollScript).then((ended) => {
+			if (ended && !handled) {
+				handled = true;
+				if (endCheckIntervalID !== null) {
+					clearInterval(endCheckIntervalID);
+					endCheckIntervalID = null;
+				}
+				log('🏁 first video ended - selecting random front-5% video');
+				clickRandomFrontVideo(20);
+			}
+		}).catch((err) => {
+			log(`❌ end-detection poll failed - error: ${err && err.message ? err.message : err}`);
+		});
+	}, 1000);
 }
 
 async function OnTextBoxAddressKeyDown(event) {
@@ -254,10 +300,25 @@ async function OnTextBoxAddressKeyDown(event) {
 	}
 }
 
+// Log each top-level webview navigation to debug.log. Tracks consecutive identical URLs so an
+// infinite same-video reload loop shows up as a rising count rather than indistinguishable lines.
+function logNavigation(kind) {
+	const url = document.getElementById("webViewTranslation").getURL();
+	if (url === lastNavigatedUrl) {
+		sameUrlNavCount++;
+		log(`🔁 repeated navigation - kind: ${kind}, count: ${sameUrlNavCount}, url: ${url}`);
+	} else {
+		lastNavigatedUrl = url;
+		sameUrlNavCount = 1;
+		log(`🧭 navigation - kind: ${kind}, url: ${url}`);
+	}
+}
+
 function OnWebViewTranslationDidNavigate() {
 	const webViewTranslation = document.getElementById("webViewTranslation");
 
 	document.getElementById("textBoxAddress").value = webViewTranslation.getURL();
+	logNavigation('did-navigate');
 	webViewTranslation.setAudioMuted(true);
 	// Match the create button by its localized aria-label to avoid hiding the avatar button area
 	webViewTranslation.insertCSS('ytd-topbar-logo-renderer, ytd-masthead button[aria-label="作成"], ytd-masthead button[aria-label="Create"], ytd-masthead button[aria-label="만들기"] { display: none !important; }');
@@ -268,40 +329,13 @@ function OnWebViewTranslationDidNavigate() {
 		}, 1000));
 		play = true;
 	}
-	
-	if (click == true) {
-		for (const i of intervalID) {
-			clearInterval(i);
-		}
-		intervalID.clear();
-
-		if (click == false) {
-			setTimeout(() => {
-				webViewTranslation.executeJavaScript("var elements = document.getElementsByClassName('yt-simple-endpoint style-scope ytd-playlist-panel-video-renderer'); elements[Math.floor(Math.random() * (elements.length / 10))].click();");
-			}, 60000);
-			click = true;
-		}
-	}
 }
 
 function OnWebViewTranslationDidNavigateInPage() {
 	const webViewTranslation = document.getElementById("webViewTranslation");
 
 	document.getElementById("textBoxAddress").value = webViewTranslation.getURL();
-	
-	if (click == true) {
-		for (const i of intervalID) {
-			clearInterval(i);
-		}
-		intervalID.clear();
-
-		if (click == false) {
-			setTimeout(() => {
-				webViewTranslation.executeJavaScript("var elements = document.getElementsByClassName('yt-simple-endpoint style-scope ytd-playlist-panel-video-renderer'); elements[Math.floor(Math.random() * (elements.length / 10))].click();");
-			}, 60000);
-			click = true;
-		}
-	}
+	logNavigation('did-navigate-in-page');
 }
 
 function OnWebViewTranslationDidFrameFinishLoad() {
@@ -319,10 +353,8 @@ function OnWebViewTranslationDidFrameFinishLoad() {
 		intervalID.clear();
 
 		if (click == false) {
-			setTimeout(() => {
-				webViewTranslation.executeJavaScript("var elements = document.getElementsByClassName('yt-simple-endpoint style-scope ytd-playlist-panel-video-renderer'); elements[Math.floor(Math.random() * (elements.length / 10))].click();");
-			}, 60000);
 			click = true;
+			startFirstVideoEndDetection();
 		}
 	}
 }
