@@ -21,6 +21,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
 const punycode = require('punycode');
 const crypto = require('crypto');
+const dns = require('dns');
 const fs = require('fs');
 const path = require('path');
 const { ipcRenderer } = require('electron');
@@ -83,6 +84,20 @@ function OnBodyLoad() {
 	}, 10);
 }
 
+// Clear the play-all click interval. Called both on watch-page arrival (goal reached) and at the start
+// of RandomPlay, because a cycle that never reaches a watch page would otherwise leak its interval into
+// the next cycle and keep clicking alongside the newly created one.
+function clearPlayAllInterval(reason) {
+	if (intervalID.size === 0) {
+		return;
+	}
+	log(`⏹ play-all interval cleared - reason: ${reason}, intervals: ${intervalID.size}`);
+	for (const i of intervalID) {
+		clearInterval(i);
+	}
+	intervalID.clear();
+}
+
 function RandomPlay() {
 	if (randomPlayTimeoutID !== null) {
 		clearTimeout(randomPlayTimeoutID);
@@ -91,6 +106,7 @@ function RandomPlay() {
 		clearInterval(endCheckIntervalID);
 		endCheckIntervalID = null;
 	}
+	clearPlayAllInterval('new cycle');
 	play = false;
 	click = false;
 
@@ -314,6 +330,12 @@ function logNavigation(kind) {
 	}
 }
 
+// Clicks the play-all button and reports page state back to the host. The returned fields exist purely
+// for diagnosing cycles that never reach a watch page: `found` tells whether the button was present at
+// all, while readyState / header / videos / title distinguish "page still rendering" from "playlist
+// unavailable or empty" (an unavailable playlist shows in the title).
+const playAllClickScript = "(function(){var els=document.querySelectorAll('ytd-playlist-header-renderer .play-button a');for(var i=0;i<els.length;i++){els[i].click();}return {found:els.length,ready:document.readyState,header:!!document.querySelector('ytd-playlist-header-renderer'),videos:document.getElementsByTagName('ytd-playlist-video-renderer').length,title:document.title};})()";
+
 function OnWebViewTranslationDidNavigate() {
 	const webViewTranslation = document.getElementById("webViewTranslation");
 
@@ -324,10 +346,46 @@ function OnWebViewTranslationDidNavigate() {
 	webViewTranslation.insertCSS('ytd-topbar-logo-renderer, ytd-masthead button[aria-label="作成"], ytd-masthead button[aria-label="Create"], ytd-masthead button[aria-label="만들기"] { display: none !important; }');
 
 	if (play == false) {
+		let attempt = 0;
 		intervalID.add(setInterval(() => {
-			webViewTranslation.executeJavaScript("var elements = document.querySelectorAll('ytd-playlist-header-renderer .play-button a'); for (var i = 0; i < elements.length; i++) { elements[i].click(); }");
+			attempt++;
+			// Log the first attempt, the attempt that finds the button, and then every 30th failing
+			// attempt. Enough to diagnose a stuck cycle without writing a line every second for hours.
+			webViewTranslation.executeJavaScript(playAllClickScript).then((info) => {
+				if (!info) {
+					log(`⚠️ play-all attempt returned no info - n: ${attempt}, url: ${webViewTranslation.getURL()}`);
+					return;
+				}
+				if (attempt === 1 || info.found > 0 || attempt % 30 === 0) {
+					log(`▶ play-all attempt - n: ${attempt}, found: ${info.found}, ready: ${info.ready}, header: ${info.header}, videos: ${info.videos}, url: ${webViewTranslation.getURL()}, title: ${info.title}`);
+				}
+			}).catch((err) => {
+				log(`❌ play-all attempt failed - n: ${attempt}, url: ${webViewTranslation.getURL()}, error: ${err && err.message ? err.message : err}`);
+			});
 		}, 1000));
 		play = true;
+	}
+}
+
+// Handle arrival on a YouTube watch page: stop the play-all click interval and start end detection.
+// Must run for in-page (SPA) transitions too. The playlist to watch transition frequently happens as a
+// history navigation, which does not fire did-frame-finish-load, so handling it only there left the 1s
+// play-all interval running and it kept reloading the same video once per second.
+function handleWatchPageReached() {
+	const webViewTranslation = document.getElementById("webViewTranslation");
+
+	if (play == false) {
+		return;
+	}
+	if (!webViewTranslation.getURL().startsWith("https://www.youtube.com/watch?")) {
+		return;
+	}
+
+	clearPlayAllInterval('watch page reached');
+
+	if (click == false) {
+		click = true;
+		startFirstVideoEndDetection();
 	}
 }
 
@@ -336,37 +394,25 @@ function OnWebViewTranslationDidNavigateInPage() {
 
 	document.getElementById("textBoxAddress").value = webViewTranslation.getURL();
 	logNavigation('did-navigate-in-page');
+	handleWatchPageReached();
 }
 
 function OnWebViewTranslationDidFrameFinishLoad() {
-	const webViewTranslation = document.getElementById("webViewTranslation");
-
-	if (play == false) {
-		click = true;
-		return;
-	}
-	
-	if (webViewTranslation.getURL().startsWith("https://www.youtube.com/watch?")) {
-		for (const i of intervalID) {
-			clearInterval(i);
-		}
-		intervalID.clear();
-
-		if (click == false) {
-			click = true;
-			startFirstVideoEndDetection();
-		}
-	}
+	handleWatchPageReached();
 }
 
-// Async DNS lookup on the domain; if it resolves, load the page
+// Async DNS lookup on the domain; if it resolves, load the page.
+// Uses dns.lookup (OS resolver) rather than dns.resolve (direct nameserver query) so the check matches
+// what the webview can actually load, including hosts-file entries. url.hostname (not url.host) is used
+// because host carries the port, which breaks the lookup.
 async function TryAsURI(url) {
 	try {
 		const webViewTranslation = document.getElementById("webViewTranslation");
 
-		await browser.dns.resolve(uri.host);
+		await dns.promises.lookup(url.hostname);
 		await webViewTranslation.loadURL(url.href);
 	}
-	catch {
+	catch (e) {
+		log(`ℹ️ TryAsURI lookup failed - host: ${url.hostname}, error: ${e && e.message ? e.message : e}`);
 	}
 }
