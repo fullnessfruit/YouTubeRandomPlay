@@ -13,10 +13,10 @@ catch (e) {
 
 // Surface any uncaught renderer errors to debug.log
 window.addEventListener('error', (event) => {
-	log(`💥 window error - msg: ${event.message}, src: ${event.filename}:${event.lineno}:${event.colno}, error: ${event.error && event.error.stack ? event.error.stack : event.error}`);
+	log(`ERROR window error - msg: ${event.message}, src: ${event.filename}:${event.lineno}:${event.colno}, error: ${event.error && event.error.stack ? event.error.stack : event.error}`);
 });
 window.addEventListener('unhandledrejection', (event) => {
-	log(`💥 window unhandledrejection - reason: ${event.reason && event.reason.stack ? event.reason.stack : event.reason}`);
+	log(`ERROR window unhandledrejection - reason: ${event.reason && event.reason.stack ? event.reason.stack : event.reason}`);
 });
 
 const punycode = require('punycode');
@@ -52,6 +52,7 @@ var randomPlayTimeoutID = null;
 var endCheckIntervalID = null;
 var lastNavigatedUrl = null;
 var sameUrlNavCount = 0;
+var exitAfterCurrentChannel = false;
 
 function OnBodyLoad() {
 	const webViewTranslation = document.getElementById("webViewTranslation");
@@ -61,10 +62,11 @@ function OnBodyLoad() {
 	webViewTranslation.addEventListener("did-navigate-in-page", OnWebViewTranslationDidNavigateInPage);
 	webViewTranslation.addEventListener("did-frame-finish-load", OnWebViewTranslationDidFrameFinishLoad);
 	webViewTranslation.addEventListener("crashed", () => {
-		log('⚠️ webview crashed - restarting RandomPlay');
+		log('WARN webview crashed - restarting RandomPlay');
 		RandomPlay();
 	});
 
+	document.getElementById("exitAfterBtn").addEventListener("click", OnExitAfterBtnClick);
 	document.getElementById("pipEnterBtn").addEventListener("click", () => { ipcRenderer.send('toggle-pip'); });
 	document.getElementById("pipExitBtn").addEventListener("click", () => { ipcRenderer.send('toggle-pip'); });
 	document.getElementById("pipCloseBtn").addEventListener("click", () => { ipcRenderer.send('window-close'); });
@@ -84,6 +86,15 @@ function OnBodyLoad() {
 	}, 10);
 }
 
+// Arm or disarm a quit for the end of the current channel hour. The flag is only read when the
+// RandomPlay 1-hour timer fires, so toggling it never interrupts the channel that is playing, and it
+// survives a mid-cycle RandomPlay restart (crash recovery) because RandomPlay does not reset it.
+function OnExitAfterBtnClick() {
+	exitAfterCurrentChannel = !exitAfterCurrentChannel;
+	document.getElementById("exitAfterBtn").classList.toggle('active', exitAfterCurrentChannel);
+	log(`exit-after-current-channel toggled - enabled: ${exitAfterCurrentChannel}`);
+}
+
 // Clear the play-all click interval. Called both on watch-page arrival (goal reached) and at the start
 // of RandomPlay, because a cycle that never reaches a watch page would otherwise leak its interval into
 // the next cycle and keep clicking alongside the newly created one.
@@ -91,7 +102,7 @@ function clearPlayAllInterval(reason) {
 	if (intervalID.size === 0) {
 		return;
 	}
-	log(`⏹ play-all interval cleared - reason: ${reason}, intervals: ${intervalID.size}`);
+	log(`play-all interval cleared - reason: ${reason}, intervals: ${intervalID.size}`);
 	for (const i of intervalID) {
 		clearInterval(i);
 	}
@@ -112,18 +123,23 @@ function RandomPlay() {
 
 	const randomIndex = crypto.randomInt(channelList.length);
 	const selectedUrl = channelList[randomIndex];
-	log(`🎲 RandomPlay - index: ${randomIndex}, url: ${selectedUrl}`);
+	log(`RandomPlay - index: ${randomIndex}, url: ${selectedUrl}`);
 
 	const webViewTranslation = document.getElementById("webViewTranslation");
 	const loadPromise = webViewTranslation.loadURL(selectedUrl);
 	if (loadPromise && typeof loadPromise.then === 'function') {
 		loadPromise.catch((err) => {
-			log(`❌ RandomPlay loadURL rejected - url: ${selectedUrl}, error: ${err && err.message ? err.message : err}`);
+			log(`ERROR RandomPlay loadURL rejected - url: ${selectedUrl}, error: ${err && err.message ? err.message : err}`);
 		});
 	}
 
 	randomPlayTimeoutID = setTimeout(() => {
-		log(`⏰ RandomPlay 1-hour timer fired`);
+		log(`RandomPlay 1-hour timer fired - exitAfterCurrentChannel: ${exitAfterCurrentChannel}`);
+		if (exitAfterCurrentChannel) {
+			log('quitting as scheduled instead of selecting the next channel');
+			ipcRenderer.send('window-close');
+			return;
+		}
 		RandomPlay();
 	}, 3600000);
 }
@@ -158,11 +174,11 @@ function startFirstVideoEndDetection() {
 					clearInterval(endCheckIntervalID);
 					endCheckIntervalID = null;
 				}
-				log('🏁 first video ended - selecting random front-5% video');
+				log('first video ended - selecting random front-5% video');
 				clickRandomFrontVideo(20);
 			}
 		}).catch((err) => {
-			log(`❌ end-detection poll failed - error: ${err && err.message ? err.message : err}`);
+			log(`ERROR end-detection poll failed - error: ${err && err.message ? err.message : err}`);
 		});
 	}, 1000);
 }
@@ -306,7 +322,7 @@ async function OnTextBoxAddressKeyDown(event) {
 			}
 		}
 		catch {
-			// Fallback: URL construction or Punycode encoding failed — treat input as a search query
+			// Fallback: URL construction or Punycode encoding failed, so treat input as a search query
 			try {
 				await webViewTranslation.loadURL("https://www.google.com/search?q=" + encodeURIComponent(textBoxAddressValue));
 			}
@@ -322,11 +338,11 @@ function logNavigation(kind) {
 	const url = document.getElementById("webViewTranslation").getURL();
 	if (url === lastNavigatedUrl) {
 		sameUrlNavCount++;
-		log(`🔁 repeated navigation - kind: ${kind}, count: ${sameUrlNavCount}, url: ${url}`);
+		log(`repeated navigation - kind: ${kind}, count: ${sameUrlNavCount}, url: ${url}`);
 	} else {
 		lastNavigatedUrl = url;
 		sameUrlNavCount = 1;
-		log(`🧭 navigation - kind: ${kind}, url: ${url}`);
+		log(`navigation - kind: ${kind}, url: ${url}`);
 	}
 }
 
@@ -353,14 +369,14 @@ function OnWebViewTranslationDidNavigate() {
 			// attempt. Enough to diagnose a stuck cycle without writing a line every second for hours.
 			webViewTranslation.executeJavaScript(playAllClickScript).then((info) => {
 				if (!info) {
-					log(`⚠️ play-all attempt returned no info - n: ${attempt}, url: ${webViewTranslation.getURL()}`);
+					log(`WARN play-all attempt returned no info - n: ${attempt}, url: ${webViewTranslation.getURL()}`);
 					return;
 				}
 				if (attempt === 1 || info.found > 0 || attempt % 30 === 0) {
-					log(`▶ play-all attempt - n: ${attempt}, found: ${info.found}, ready: ${info.ready}, header: ${info.header}, videos: ${info.videos}, url: ${webViewTranslation.getURL()}, title: ${info.title}`);
+					log(`play-all attempt - n: ${attempt}, found: ${info.found}, ready: ${info.ready}, header: ${info.header}, videos: ${info.videos}, url: ${webViewTranslation.getURL()}, title: ${info.title}`);
 				}
 			}).catch((err) => {
-				log(`❌ play-all attempt failed - n: ${attempt}, url: ${webViewTranslation.getURL()}, error: ${err && err.message ? err.message : err}`);
+				log(`ERROR play-all attempt failed - n: ${attempt}, url: ${webViewTranslation.getURL()}, error: ${err && err.message ? err.message : err}`);
 			});
 		}, 1000));
 		play = true;
@@ -413,6 +429,6 @@ async function TryAsURI(url) {
 		await webViewTranslation.loadURL(url.href);
 	}
 	catch (e) {
-		log(`ℹ️ TryAsURI lookup failed - host: ${url.hostname}, error: ${e && e.message ? e.message : e}`);
+		log(`TryAsURI lookup failed - host: ${url.hostname}, error: ${e && e.message ? e.message : e}`);
 	}
 }

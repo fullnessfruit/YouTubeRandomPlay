@@ -36,7 +36,7 @@ function ensureCorrectPackageJson() {
   } else {
     targetIndex = (record.index + 1) % channelListSlotCount;
     fs.writeFileSync(recordFilePath, JSON.stringify({ date: today, index: targetIndex }), 'utf8');
-    log(`📅 channel rotation - date: ${today}, index: ${targetIndex}`);
+    log(`channel rotation -date: ${today}, index: ${targetIndex}`);
   }
 
   const templatePath = path.join(__dirname, packageTemplates[targetIndex]);
@@ -44,13 +44,13 @@ function ensureCorrectPackageJson() {
   try {
     templateName = JSON.parse(fs.readFileSync(templatePath, 'utf8')).name;
   } catch (e) {
-    log(`⚠️ package template read failed - path: ${templatePath}, error: ${e && e.message ? e.message : e}`);
+    log(`WARN package template read failed - path: ${templatePath}, error: ${e && e.message ? e.message : e}`);
     return false;
   }
   try {
     currentName = JSON.parse(fs.readFileSync(packagePath, 'utf8')).name;
   } catch (e) {
-    log(`⚠️ current package.json read failed - error: ${e && e.message ? e.message : e}`);
+    log(`WARN current package.json read failed - error: ${e && e.message ? e.message : e}`);
     return false;
   }
 
@@ -58,13 +58,13 @@ function ensureCorrectPackageJson() {
     return false;
   }
 
-  log(`🔄 package.json swap - from: ${currentName}, to: ${templateName}, template: ${packageTemplates[targetIndex]}, index: ${targetIndex}`);
+  log(`package.json swap - from: ${currentName}, to: ${templateName}, template: ${packageTemplates[targetIndex]}, index: ${targetIndex}`);
   fs.copyFileSync(templatePath, packagePath);
   return true;
 }
 
 if (ensureCorrectPackageJson()) {
-  log('🔁 relaunching after package.json swap');
+  log('relaunching after package.json swap');
   app.relaunch();
   app.exit(0);
 }
@@ -94,23 +94,23 @@ function createWindow () {
 
   win.setMenu(null);
   win.loadFile('index.html')
-    .catch((err) => { log(`❌ loadFile rejected - error: ${err && err.message ? err.message : err}`); });
+    .catch((err) => { log(`ERROR loadFile rejected - error: ${err && err.message ? err.message : err}`); });
 
   // Forward renderer error-level console messages to debug.log (level 3 only; levels: 0=verbose, 1=info, 2=warning, 3=error)
   win.webContents.on('console-message', (event, level, message, line, sourceId) => {
     if (level === 3) {
-      log(`🖥 renderer console error - source: ${sourceId}:${line}, msg: ${message}`);
+      log(`ERROR renderer console error - source: ${sourceId}:${line}, msg: ${message}`);
     }
   });
 
   win.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-    log(`❌ did-fail-load - code: ${errorCode}, desc: ${errorDescription}, url: ${validatedURL}, mainFrame: ${isMainFrame}`);
+    log(`ERROR did-fail-load - code: ${errorCode}, desc: ${errorDescription}, url: ${validatedURL}, mainFrame: ${isMainFrame}`);
   });
   win.webContents.on('preload-error', (event, preloadPath, error) => {
-    log(`❌ preload-error - path: ${preloadPath}, error: ${error && error.message ? error.message : error}`);
+    log(`ERROR preload-error - path: ${preloadPath}, error: ${error && error.message ? error.message : error}`);
   });
   win.webContents.on('render-process-gone', (event, details) => {
-    log(`❌ render-process-gone - reason: ${details.reason}, exitCode: ${details.exitCode}`);
+    log(`ERROR render-process-gone - reason: ${details.reason}, exitCode: ${details.exitCode}`);
   });
 
   // Notify renderer of PIP mode after load
@@ -139,15 +139,15 @@ ipcMain.on('toggle-pip', () => {
   if (!win) return;
 
   if (isPip) {
-    // PIP → Normal: drop always-on-top but keep the current window size
+    // PIP to Normal: drop always-on-top but keep the current window size
     isPip = false;
     win.setAlwaysOnTop(false);
-    log(`toggle-pip → normal - bounds: ${JSON.stringify(win.getBounds())}`);
+    log(`toggle-pip to normal - bounds: ${JSON.stringify(win.getBounds())}`);
   } else {
-    // Normal → PIP: restore always-on-top but keep the current window size
+    // Normal to PIP: restore always-on-top but keep the current window size
     isPip = true;
     win.setAlwaysOnTop(true, 'screen-saver');
-    log(`toggle-pip → pip - bounds: ${JSON.stringify(win.getBounds())}`);
+    log(`toggle-pip to pip - bounds: ${JSON.stringify(win.getBounds())}`);
   }
 
   win.webContents.send('pip-changed', isPip);

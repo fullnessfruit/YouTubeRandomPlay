@@ -63,6 +63,13 @@
 			color: white;
 		}
 
+		/* Scheduled-quit toggle, lit while a quit is armed for the end of the current channel hour.
+		   Two IDs are needed to outrank the base and :hover rules above. */
+		#titleBar .window-controls #exitAfterBtn.active {
+			background: #e81123;
+			color: white;
+		}
+
 		/* Address bar */
 		#addressDivision {
 			width: 100%;
@@ -151,6 +158,7 @@
 		<div id="titleBar">
 			<span class="title-text"></span>
 			<div class="window-controls">
+				<button id="exitAfterBtn" title="Quit when the current channel hour ends">⏻</button>
 				<button id="pipEnterBtn" title="PIP Mode">⛶</button>
 				<button id="minBtn" title="Minimize">─</button>
 				<button id="maxBtn" title="Maximize">□</button>
