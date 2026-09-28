@@ -2,6 +2,7 @@ exports.ChannelList = function ChannelList() {
 	return channelList;
 }
 
+// Entry: "url" or ["url", true]. true = when the 1-hour slot ends mid-video, switch channel after that video ends.
 const channelList = [
 	"https://www.youtube.com/playlist?list=UUFtEEv80fQVKkD4h1PF-Xqw",
 	"https://www.youtube.com/playlist?list=UUE_M8A5yxnLfW0KghEeajjw",

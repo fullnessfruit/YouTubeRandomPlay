@@ -72,11 +72,12 @@ if (ensureCorrectPackageJson()) {
 
 let win;
 let isPip = true;
+const topmostReassertIntervalMs = 1000;
 
 function createWindow () {
   win = new BrowserWindow({
-    width: 320,
-    height: 180,
+    width: 86,
+    height: 234,
     frame: false,
     resizable: true,
     alwaysOnTop: true,
@@ -127,6 +128,18 @@ function createWindow () {
       win.setAlwaysOnTop(true, 'screen-saver');
     }
   });
+
+  // On Windows every always-on-top level maps to the same HWND_TOPMOST band, so the 'screen-saver'
+  // level does not beat other topmost windows. The taskbar and other topmost apps get raised above us
+  // whenever they are activated, and that z-order loss does not fire always-on-top-changed. Re-raise
+  // periodically while in PIP. Skipped while focused (already on top, and avoids fighting a drag/resize).
+  const topmostReassertTimer = setInterval(() => {
+    if (isPip && !win.isDestroyed() && !win.isFocused() && !win.isMinimized()) {
+      win.moveTop();
+    }
+  }, topmostReassertIntervalMs);
+  win.on('closed', () => { clearInterval(topmostReassertTimer); });
+  log(`topmost reassert timer started - intervalMs: ${topmostReassertIntervalMs}`);
 
   win.on('resize', () => {
     log(`resize - bounds: ${JSON.stringify(win.getBounds())}, alwaysOnTop: ${win.isAlwaysOnTop()}, isPip: ${isPip}`);

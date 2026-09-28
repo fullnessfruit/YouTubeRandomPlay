@@ -19,6 +19,10 @@
 - 이 작업의 결과를 현재 모델의 벤치마크로 사용하여 모델의 성능을 평가합니다.
 ### Project-Specific Approach
 - 코드 주석은 항상 영어로 작성
+- **작업을 시작하기 전에 반드시 TODO.md를 읽고, 문서 맨 앞의 「이 문서의 사용 방법」을 따른다.**
+  사용 방법의 원본(정본)은 TODO.md에 있다. 여기에는 복사본을 두지 않는다. 두 곳에 동일한 내용을 두었을 때 실제로 문구가 서로 달라진 적이 있기 때문이다.
+- **요구사항 및 판단 기준의 원본은 사용자의 명시적인 지시와 정식 사양이다.**
+  설계서, 구현안, 작업 계획, 요약, 조사 결과, 현황 설명 등 지시나 사양을 바탕으로 작성된 파생 문서는 그 자체가 새로운 지시나 요구사항이 되는 것이 아니다. 설계서는 요구사항을 실현하기 위한 하나의 방안이며, 현황 설명은 현재 구현 상태를 기술한 자료일 뿐이므로, 명시적으로 원본으로 지정되지 않는 한 원래의 지시나 사양보다 우선해서는 안 된다. 파생 문서나 우선순위가 낮다고 판단되는 문서를 참고하여 판단할 경우에는 그 문서의 바탕이 된 원래의 지시나 사양을 확인하고, 그 목적과 의도에 따라 해석해야 한다. 내용이 서로 충돌할 경우에는 사용자의 최신 명시적 지시, 정식 사양, 파생 문서의 순서로 우선한다.
 - 기능을 구현하기 전에 먼저 이 Document.md를 확인하여, 비슷한 기능이나 유틸리티가 이미 존재하는지 확인
 - 기존 코드와 기존 유틸리티 함수(예: `extractAccountFromUrl`, `normalizeUrl` 등)를 적극 재사용하고, 기존과 비슷한 로직을 만들어야 하는 경우가 생기면 가능한 공통 로직으로 만들어서 최대한 같은 로직을 중복 구현하지 않도록 해야함
 - 요구사항이 불분명하거나 여러 해석이 가능한 경우, 추측하지 말고 사용자에게 질문
@@ -62,6 +66,7 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 - `ChannelList_l_h.js` - 경량 세트 (232개) - index 1
 - `ChannelList_l_n.js` - 경량 세트 (204개) - index 2
 - `ChannelList_l_u.js` - 최경량 세트 (191개) - index 3
+- ChannelList 엔트리 형식: `"url"` 또는 `["url", true|false]`. 두 번째 값은 `waitForVideoEnd`이며 plain 문자열은 `false`. EventHandler.js의 `normalizeChannelList()`가 `{ url, waitForVideoEnd }`로 정규화
 - `channel_record.json` - 런타임 상태 (오늘 날짜, 활성 채널리스트 인덱스). main.js가 시작 시 갱신, EventHandler.js는 읽기만 함
 - `package_l.json`, `package_l_h.json`, `package_l_n.json`, `package_l_u.json` - 각 ChannelList 인덱스(0~3)에 대응하는 Electron `name` 템플릿. main.js가 매일 회전 시 해당 템플릿을 `package.json`으로 복사 (`.gitignore`로 로컬 전용)
 - `tlds-alpha-by-domain.js` - IANA TLD 목록 (URL 검증용)
@@ -96,15 +101,17 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 - swap 불필요 시 일반 초기화 흐름 (`app.whenReady()` → `createWindow()`)으로 진입
 
 **PIP 모드**
-- 시작 시 PIP 모드 (320x180, alwaysOnTop, 프레임리스)
+- 시작 시 PIP 모드 (86x234 DIP, alwaysOnTop, 프레임리스)
 - `isPip` 플래그로 모드 관리 (`win.isAlwaysOnTop()` 대신 사용. OS가 alwaysOnTop을 풀어도 PIP 의도 유지)
-- `win.setAlwaysOnTop(true, 'screen-saver')` - 전체화면 앱 위에도 표시 (기본 `'floating'` 레벨은 전체화면 뒤에 숨겨짐)
-- `always-on-top-changed` 이벤트: PIP 모드에서 alwaysOnTop이 풀리면 자동 복구 (리사이즈 등에 의한 해제 대응)
-- **PIP 토글은 창 크기를 변경하지 않음**: `alwaysOnTop`과 렌더러 UI만 전환하여 사용자가 리사이즈한 크기를 모드 전환 후에도 유지. 윈도우 생성 시 320x180으로 시작하지만 이후 크기는 사용자 조정에 맡김
+- `win.setAlwaysOnTop(true, 'screen-saver')` - level은 macOS에서만 의미가 있음. **Windows에서는 모든 level이 동일한 HWND_TOPMOST 대역**이라 다른 topmost 창(시작 표시줄 포함)보다 위라는 보장이 없고, 그 창이 활성화되면 그 아래로 밀려남
+- **topmost 재확보 타이머**: 위 z-order 손실은 `always-on-top-changed`를 발화시키지 않으므로(플래그는 true 유지), PIP 중에는 `topmostReassertIntervalMs`(1초)마다 `win.moveTop()`으로 topmost 대역 최상단에 다시 올림. 창이 포커스 중이면 이미 최상단이고 드래그/리사이즈와 경합하지 않도록 스킵, 최소화 중에도 스킵. 창 `closed` 시 정리. 시작 메뉴/검색 플라이아웃 같은 셸 전용 상위 대역은 일반 앱이 넘을 수 없음
+- `always-on-top-changed` 이벤트: PIP 모드에서 alwaysOnTop 플래그 자체가 풀리면 자동 복구
+- **PIP 토글은 창 크기를 변경하지 않음**: `alwaysOnTop`과 렌더러 UI만 전환하여 사용자가 리사이즈한 크기를 모드 전환 후에도 유지. 윈도우 생성 시 86x234로 시작하지만 이후 크기는 사용자 조정에 맡김
 
 `createWindow()`
-- PIP 모드로 윈도우 생성 (320x180, frame: false, alwaysOnTop: true)
+- PIP 모드로 윈도우 생성 (86x234, frame: false, alwaysOnTop: true)
 - `did-finish-load`에서 렌더러에 `pip-changed` IPC 전송
+- topmost 재확보 타이머 시작
 - `always-on-top-changed`, `resize` 이벤트에 디버그 로그 연결
 
 `ipcMain.on('toggle-pip')` - PIP ↔ 일반 모드 전환. `isPip` 플래그와 `alwaysOnTop`만 토글하고 `pip-changed` 전송. 창 크기(bounds)는 건드리지 않음
@@ -134,20 +141,28 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 
 **글로벌 상태 변수**
 - `play` (boolean) - YouTube 재생 버튼 클릭 인터벌이 활성화되었는지 여부
-- `click` (boolean) - 이번 사이클의 랜덤 클릭 단계(종료 감지 시작 포함)가 이미 처리되었는지 여부 (1회성 가드)
-- `intervalID` (Set) - 활성 setInterval ID 추적 (정리용)
+- `intervalID` (Set) - 활성 play-all setInterval ID 추적 (정리용)
 - `randomPlayTimeoutID` - RandomPlay 1시간 타이머 ID (크래시 복구 시 중복 방지용)
-- `endCheckIntervalID` - 최초 영상 종료 감지 폴링 인터벌 ID (종료 감지 후 및 RandomPlay 재시작 시 정리용)
+- `monitorIntervalID` - 재생 모니터(`startPlaybackMonitor`) 인터벌 ID. null이 아니면 이번 사이클의 모니터가 이미 시작된 것이며, 모니터 시작 1회성 가드를 겸함
+- `currentEntry` - 이번 사이클에 선택된 `{ url, waitForVideoEnd }`
+- `currentListId` - `currentEntry.url`의 `list` 파라미터. 모니터가 "이번 사이클의 재생목록 watch 페이지인가"를 판정하는 기준
+- `pendingSwitchVideoId` - 1시간 경과 후 `waitForVideoEnd`로 전환을 미룬 경우 끝나기를 기다리는 영상 id. null이면 대기 없음
+- `lastPoll` - 모니터의 최신 폴링 결과 `{ onCycleWatch, videoId, ended }`. 1시간 타이머 발화 시 "지금 재생 중인 영상"을 판단하는 데 사용
 - `lastNavigatedUrl`, `sameUrlNavCount` - 직전 내비게이션 URL과 연속 동일 URL 횟수 (내비게이션 로깅용)
-- `exitAfterCurrentChannel` (boolean) - 현재 채널의 1시간이 끝나면 다음 채널로 넘어가지 않고 프로그램을 종료할지 여부. 타이틀바 토글 버튼으로 설정하며, RandomPlay 1시간 타이머 발화 시점에만 읽음
+- `exitAfterCurrentChannel` (boolean) - 현재 채널이 끝나면(1시간 경과 또는 재생 정지) 다음 채널로 넘어가지 않고 프로그램을 종료할지 여부. 타이틀바 토글 버튼으로 설정하며, `endChannel()`에서만 읽음
+
+**상수**: `PLAYBACK_MONITOR_INTERVAL_MS`(1000), `PLAYBACK_STALL_MS`(60000)
 
 `log(msg)` - `debug.log` 파일에 타임스탬프 포함 로그 추가 (main.js와 동일 파일에 기록)
 
 **채널 리스트 로딩**
 
 `getChannelListForToday()`
-- `channel_record.json`을 읽고 `record.index`에 해당하는 ChannelList 모듈을 로드. 회전/swap은 main.js가 이미 처리했으므로 여기서는 단순 reader
+- `channel_record.json`을 읽고 `record.index`에 해당하는 ChannelList 모듈을 로드해 `normalizeChannelList()`로 정규화. 회전/swap은 main.js가 이미 처리했으므로 여기서는 단순 reader
 - 프로그램 시작 시 1회 실행, 결과를 `channelList` 상수에 저장
+
+`normalizeChannelList(entries)`
+- `"url"` → `{ url, waitForVideoEnd: false }`, `["url", bool]` → `{ url, waitForVideoEnd: bool }`. 그 외 형식은 `WARN invalid channel list entry skipped` 로그 후 제외
 
 **재생 사이클**
 
@@ -155,25 +170,46 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 - `intervalID`의 play-all 인터벌을 모두 정리. 비어 있으면 무동작, 정리 시 `play-all interval cleared` 1줄 로그
 - **watch 도달 시점과 RandomPlay 시작 시점 양쪽에서 호출**. watch에 도달하지 못한 채 1시간 로테이션이 오면 이전 사이클의 인터벌이 남아 새 인터벌과 함께 중복 클릭하므로, 새 사이클 시작 시에도 반드시 정리 필요
 
+`stopPlaybackMonitor()` - 재생 모니터 인터벌 정리 + `monitorIntervalID = null`
+
 `RandomPlay()`
-- 이전 1시간 타이머, 종료 감지 폴링 인터벌(`endCheckIntervalID`), play-all 인터벌(`clearPlayAllInterval`) 취소 후 `play`, `click` 플래그 리셋
-- `channelList`에서 `crypto.randomInt()`으로 랜덤 URL 선택 후 webview 로드. 선택된 index+URL을 `debug.log`에 1줄 기록
+- 이전 1시간 타이머, 재생 모니터(`stopPlaybackMonitor`), play-all 인터벌(`clearPlayAllInterval`) 취소 후 `play`, `pendingSwitchVideoId`, `lastPoll` 리셋
+- `channelList`에서 `crypto.randomInt()`으로 랜덤 엔트리 선택 → `currentEntry`, `currentListId` 설정 후 webview 로드. index+URL+waitForVideoEnd를 1줄 기록
 - `loadURL` 실패 시 `ERROR RandomPlay loadURL rejected` 로그
-- `setTimeout(RandomPlay, 3600000)` - 1시간 후 재귀 호출. 발화 시 `RandomPlay 1-hour timer fired` 로그
-- **타이머 발화 시 `exitAfterCurrentChannel` 분기**: true이면 `RandomPlay()` 대신 `window-close` IPC를 보내 프로그램 종료, false이면 기존대로 다음 채널 선택. 종료 예약을 확인하는 지점이 여기뿐이므로 토글을 켜도 재생 중인 채널은 중단되지 않음
+- `setTimeout(OnChannelHourElapsed, 3600000)` - 1시간 타이머
+
+`OnChannelHourElapsed()`
+- 1시간 타이머 발화 시 호출. `RandomPlay 1-hour timer fired` 로그
+- `currentEntry.waitForVideoEnd`가 true이고 `lastPoll`상 이번 재생목록 watch 페이지에서 끝나지 않은 영상이 있으며 모니터가 동작 중이면, 그 영상 id를 `pendingSwitchVideoId`에 넣고 전환을 미룸 (`channel switch deferred` 로그). 실제 전환은 재생 모니터가 수행
+- 그 외에는 즉시 `endChannel('hour elapsed')`
+
+`endChannel(reason)`
+- 채널 종료 지점(1시간 경과, 미뤄둔 영상 종료, 재생 정지) 처리. `exitAfterCurrentChannel`이 true이면 모니터 정지 후 `window-close` IPC로 종료, false이면 `RandomPlay()`
+- 종료 예약을 확인하는 지점이 여기뿐이므로 토글을 켜도 재생 중인 채널은 중단되지 않음. 재생 정지로 인한 조기 전환도 `endChannel`을 거치므로, 예약 중이면 다음 채널로 넘어가지 않고 그 시점에 바로 종료
 
 `OnExitAfterBtnClick()`
 - `exitAfterCurrentChannel`을 토글하고 `#exitAfterBtn`에 `active` CSS 클래스를 반영. `exit-after-current-channel toggled` 로그
 - `RandomPlay()`가 이 플래그를 리셋하지 않으므로 크래시 복구로 사이클이 재시작돼도 예약이 유지됨
 
-`clickRandomFrontVideo(divisor)`
-- watch 페이지 재생목록 사이드바에서 앞쪽 `1/divisor` 구간 중 랜덤 동영상 클릭. divisor 20 = 앞 5%, 10 = 앞 10%. 빈 목록 가드 포함
-- 기존 3곳에 중복돼 있던 랜덤 클릭 스니펫을 공통화한 함수
+`clickRandomFrontVideo(divisor, excludeVideoIds)`
+- watch 페이지 재생목록 사이드바에서 앞쪽 `ceil(length/divisor)`개 구간 중 랜덤 동영상 클릭. divisor 20 = 앞 5%, 10 = 앞 10%. 빈 목록 가드 포함
+- `excludeVideoIds`(선택)에 든 영상 id(링크 href의 `v` 파라미터)는 후보에서 제외. 앞 구간에 남는 후보가 없으면 사이드바 전체에서 선택 (업로드 재생목록은 라이브 예고가 맨 앞에 오므로 소규모 목록에서 앞 구간이 예고 1개뿐인 경우 대비)
+- 결과(panelCount, 클릭한 href)를 `random video click` 1줄로 기록
 
-`startFirstVideoEndDetection()`
-- 최초 재생 영상이 끝까지 재생되어 종료되는 시점을 1초 간격 폴링으로 감지 후 `clickRandomFrontVideo(20)`(앞 5%) 호출. `endCheckIntervalID`로 인터벌 추적, `handled` 가드로 1회만 동작
-- **표준 HTML5 미디어 API 사용** (YouTube 내부 `getPlayerState`보다 안정적). 게스트에 capture 단계 `ended` 리스너를 1회 주입해 sticky 플래그(`window.__ytEnded`) 설정. media 이벤트는 버블링되지 않아 document capture 필수이며, 자동재생으로 종료 상태가 짧게 스쳐도 플래그로 포착. `#movie_player video`의 `.ended` 직접 읽기를 폴백으로 사용(이미 종료된 경우 커버)
-- 리스너를 `#movie_player` 내부 video로 한정해 hover 미리보기/미니플레이어 video의 오탐 방지, `.ad-showing` 존재 시 광고 종료 제외
+`playbackPollScript` (게스트에 주입하는 폴링 스크립트)
+- 반환: `endedFlag`, `ended`, `ad`, `time`(currentTime), `paused`, `respVideoId`, `upcoming`, `status`, `slate`
+- **종료 감지는 표준 HTML5 미디어 API** (YouTube 내부 `getPlayerState`보다 안정적). capture 단계 `ended` 리스너를 1회 주입해 sticky 플래그(`window.__ytEnded`) 설정. media 이벤트는 버블링되지 않아 document capture 필수이며, 자동재생으로 종료 상태가 짧게 스쳐도 플래그로 포착. `#movie_player video`의 `.ended`를 폴백으로 사용. `#movie_player` 내부 video로 한정해 hover 미리보기/미니플레이어 오탐 방지, `.ad-showing` 시 광고 종료 제외. 이 sticky 플래그는 페이지 컨텍스트 수명 동안 유지되므로 "최초 영상 종료" 판정에만 사용
+- **라이브 예고 판정 (미디어 API로는 "예약됨, 미시작"을 알 수 없음)**: (a) `#movie_player.getPlayerResponse()`의 `videoDetails.isUpcoming` 또는 `playabilityStatus.status === 'LIVE_STREAM_OFFLINE'` (b) `#movie_player .ytp-offline-slate`(카운트다운 + 알림 받기 버튼이 있는 대기 화면)가 레이아웃 박스를 가짐(`getClientRects().length`). 슬레이트는 숨겨진 채 DOM에 남을 수 있어 표시 여부로 판정. (a)는 SPA 전환 직후 이전 영상의 응답일 수 있어 호스트에서 `respVideoId`가 URL의 `v`와 같을 때만 채택
+
+`startPlaybackMonitor()`
+- watch 페이지 도달 시 시작해 다음 `RandomPlay()`까지 도는 **유일한 1초 폴러** (최초 영상 종료 감지를 겸함). `busy` 가드로 executeJavaScript 응답 전 중복 폴링 방지, 응답 도착 시 `monitorIntervalID`가 바뀌었으면(사이클 교체) 결과 폐기
+- `onCycleWatch` = URL이 `/watch`이고 `list`가 `currentListId`와 일치. 주소창 수동 내비게이션 중에는 false이므로 정지/예고 판정이 동작하지 않음 (진행 타이머도 계속 리셋)
+- 처리 순서:
+  1. **미뤄둔 전환**: `pendingSwitchVideoId`가 있고 영상 id가 바뀌었거나 `ended`이거나 `onCycleWatch`가 아니면 `endChannel('deferred video ended')`
+  2. **라이브 예고**: 예고 판정이고 이번 사이클에 처리하지 않은 id면 Set에 추가 후 `clickRandomFrontVideo(20, 예고 id 전체)`. 처리한 예고 id를 모두 제외하므로 예고 2개가 서로를 고르며 무한 왕복하지 않음. 클릭이 실패해 그대로 멈춰 있으면 아래 정지 판정이 채널을 바꿈
+  3. **최초 영상 종료**: 사이클당 1회 `clickRandomFrontVideo(20, 예고 id 전체)` (앞 5%)
+  4. **재생 정지**: 영상 id 또는 `currentTime`이 `PLAYBACK_STALL_MS`(60초) 동안 변하지 않으면(광고 재생 중은 진행으로 간주) 1시간 전이라도 `endChannel('playback stalled')`로 채널 종료(예약 중이면 프로그램 종료). 재생목록 끝에서 자동재생이 멈춘 경우, "계속 시청하시겠습니까?" 등으로 정지한 경우, 첫 영상이 시작조차 안 된 경우를 모두 포괄. 전환 대기 중(`pendingSwitchVideoId`)에 정지하면 `endChannel('deferred video stalled')`
+- `playback stalled` 로그에 videoId/time/paused/ended/status/upcoming/slate를 함께 남겨 정지 원인을 사후 분석 가능
 - webview에 preload IPC 브리지가 없어 호스트에서 폴링하는 구조
 
 **진단 로깅 아키텍처**
@@ -206,18 +242,18 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
    - **`did-frame-finish-load`와 `did-navigate-in-page` 양쪽에서 호출**. 재생목록 → watch 전환은 history 내비게이션(in-page)으로 일어나는 경우가 잦은데, in-page 전환은 `did-frame-finish-load`를 발화시키지 않는다. 이 처리를 did-frame-finish-load에만 두면 1초 play-all 인터벌이 정리되지 않아 같은 영상이 1초마다 재로딩된다
    - `play == false`이거나 watch URL이 아니면 조기 반환
    - `clearPlayAllInterval('watch page reached')` 호출
-   - `click == false`이면 `click = true`로 가드 후 `startFirstVideoEndDetection()` 시작
+   - `monitorIntervalID === null`이면 `startPlaybackMonitor()` 시작 (사이클당 1회)
 
 3. `OnWebViewTranslationDidFrameFinishLoad()` - 프레임 로드 완료 시
-   - `handleWatchPageReached()`에 위임만 함. **별도의 `play == false` 분기를 두지 않는 것이 중요**: 이 이벤트는 인터벌 생성 전(about:blank 로드 등)에도 발화할 수 있는데, 과거처럼 그 경로에서 `click = true`를 설정하면 이후 watch 도달 시 종료 감지가 시작되지 않아 앞 5% 점프가 조용히 누락됨. `play == false` 처리는 `handleWatchPageReached()`의 조기 반환이 담당
+   - `handleWatchPageReached()`에 위임만 함. **별도의 `play == false` 분기를 두지 않는 것이 중요**: 이 이벤트는 인터벌 생성 전(about:blank 로드 등)에도 발화할 수 있는데, 그 경로에서 모니터 시작 가드를 소비하면 이후 watch 도달 시 모니터가 시작되지 않아 앞 5% 점프와 정지/예고 처리가 조용히 누락됨. `play == false` 처리는 `handleWatchPageReached()`의 조기 반환이 담당
 
 4. `OnWebViewTranslationDidNavigateInPage()` - in-page 내비게이션 시
    - 주소창 업데이트, `logNavigation`, `handleWatchPageReached()` 호출
 
-**실제 랜덤 동영상 클릭이 발생하는 유일한 경로**: RandomPlay() → 재생목록 로드 → play 버튼 클릭 인터벌 시작(play=true) → watch 페이지 도달 시 `handleWatchPageReached()`가 인터벌 정리 + click=true → 최초 영상 종료 감지 → 앞 5% 랜덤 클릭
+**랜덤 동영상 클릭 경로**: RandomPlay() → 재생목록 로드 → play 버튼 클릭 인터벌 시작(play=true) → watch 페이지 도달 시 `handleWatchPageReached()`가 인터벌 정리 + 재생 모니터 시작 → 모니터가 최초 영상 종료 또는 라이브 예고를 감지 → 앞 5% 랜덤 클릭
 
 **랜덤 동영상 클릭의 비자명한 동작** (`clickRandomFrontVideo`)
-- `elements.length / divisor` - 재생목록 앞쪽 `1/divisor` 구간에서만 랜덤 선택 (전체가 아닌 상위 항목 선호). 현재 호출은 divisor 20 = 앞 5%
+- 재생목록 앞쪽 `1/divisor` 구간에서만 랜덤 선택 (전체가 아닌 상위 항목 선호). 현재 호출은 모두 divisor 20 = 앞 5%
 - CSS 클래스 `yt-simple-endpoint style-scope ytd-playlist-panel-video-renderer` - YouTube 재생목록 사이드바 동영상 요소
 
 **URL 검증 (OnTextBoxAddressKeyDown)**
@@ -238,8 +274,10 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 |--------|------|------|
 | 초기 시작 | 10ms | OnBodyLoad → RandomPlay 지연 호출 |
 | 재생 버튼 클릭 | 1초 인터벌 | YouTube 재생 버튼 반복 탐색/클릭 |
-| 최초 영상 종료 감지 | 1초 인터벌 폴링 | watch 페이지에서 최초 영상이 끝까지 재생될 때까지 폴링 → 앞 5% 랜덤 클릭 |
-| 재생목록 로테이션 | 1시간 (3,600,000ms) | 새 랜덤 재생목록으로 전환 |
+| 재생 모니터 | 1초 인터벌 폴링 | watch 도달 ~ 다음 RandomPlay. 최초 영상 종료/라이브 예고 → 앞 5% 랜덤 클릭, 정지 판정, 미뤄둔 전환 |
+| 재생 정지 판정 | 60초 | 영상 id/currentTime 무변화 시 채널 조기 전환 |
+| topmost 재확보 | 1초 인터벌 (main.js) | PIP 중 비포커스 시 `win.moveTop()` |
+| 재생목록 로테이션 | 1시간 (3,600,000ms) | 새 랜덤 재생목록으로 전환 (`waitForVideoEnd` 엔트리는 재생 중 영상 종료 후) |
 
 ---
 

@@ -39,17 +39,42 @@ const recordFilePath = path.join(__dirname, 'channel_record.json');
 // before the renderer starts. Here we just read the index it already committed.
 function getChannelListForToday() {
 	const record = JSON.parse(fs.readFileSync(recordFilePath, 'utf8'));
-	return require(channelListFiles[record.index]).ChannelList();
+	return normalizeChannelList(require(channelListFiles[record.index]).ChannelList());
+}
+
+// Channel list entries are either a plain URL string or [url, waitForVideoEnd]. A plain string means
+// waitForVideoEnd = false. Normalized to { url, waitForVideoEnd } so the rest of the code sees one shape.
+function normalizeChannelList(entries) {
+	const normalized = [];
+	entries.forEach((entry, i) => {
+		if (typeof entry === 'string') {
+			normalized.push({ url: entry, waitForVideoEnd: false });
+		}
+		else if (Array.isArray(entry) && typeof entry[0] === 'string' && typeof entry[1] === 'boolean') {
+			normalized.push({ url: entry[0], waitForVideoEnd: entry[1] });
+		}
+		else {
+			log(`WARN invalid channel list entry skipped - index: ${i}, entry: ${JSON.stringify(entry)}`);
+		}
+	});
+	return normalized;
 }
 
 const channelList = getChannelListForToday();
 
+// Playback monitor thresholds
+const PLAYBACK_MONITOR_INTERVAL_MS = 1000;
+const PLAYBACK_STALL_MS = 60000;
+
 var topLevelDomainList = null;
 var play = false;
 var intervalID = new Set();
-var click = false;
 var randomPlayTimeoutID = null;
-var endCheckIntervalID = null;
+var monitorIntervalID = null;
+var currentEntry = null;
+var currentListId = null;
+var pendingSwitchVideoId = null;
+var lastPoll = null;
 var lastNavigatedUrl = null;
 var sameUrlNavCount = 0;
 var exitAfterCurrentChannel = false;
@@ -109,21 +134,33 @@ function clearPlayAllInterval(reason) {
 	intervalID.clear();
 }
 
+function stopPlaybackMonitor() {
+	if (monitorIntervalID !== null) {
+		clearInterval(monitorIntervalID);
+		monitorIntervalID = null;
+	}
+}
+
 function RandomPlay() {
 	if (randomPlayTimeoutID !== null) {
 		clearTimeout(randomPlayTimeoutID);
 	}
-	if (endCheckIntervalID !== null) {
-		clearInterval(endCheckIntervalID);
-		endCheckIntervalID = null;
-	}
+	stopPlaybackMonitor();
 	clearPlayAllInterval('new cycle');
 	play = false;
-	click = false;
+	pendingSwitchVideoId = null;
+	lastPoll = null;
 
 	const randomIndex = crypto.randomInt(channelList.length);
-	const selectedUrl = channelList[randomIndex];
-	log(`RandomPlay - index: ${randomIndex}, url: ${selectedUrl}`);
+	currentEntry = channelList[randomIndex];
+	const selectedUrl = currentEntry.url;
+	try {
+		currentListId = new URL(selectedUrl).searchParams.get('list');
+	}
+	catch {
+		currentListId = null;
+	}
+	log(`RandomPlay - index: ${randomIndex}, url: ${selectedUrl}, waitForVideoEnd: ${currentEntry.waitForVideoEnd}`);
 
 	const webViewTranslation = document.getElementById("webViewTranslation");
 	const loadPromise = webViewTranslation.loadURL(selectedUrl);
@@ -133,54 +170,146 @@ function RandomPlay() {
 		});
 	}
 
-	randomPlayTimeoutID = setTimeout(() => {
-		log(`RandomPlay 1-hour timer fired - exitAfterCurrentChannel: ${exitAfterCurrentChannel}`);
-		if (exitAfterCurrentChannel) {
-			log('quitting as scheduled instead of selecting the next channel');
-			ipcRenderer.send('window-close');
-			return;
-		}
-		RandomPlay();
-	}, 3600000);
+	randomPlayTimeoutID = setTimeout(OnChannelHourElapsed, 3600000);
+}
+
+// The channel hour is over. Entries flagged waitForVideoEnd let the video that is playing right now
+// finish first; the playback monitor then calls endChannel() once that video id changes or ends.
+function OnChannelHourElapsed() {
+	randomPlayTimeoutID = null;
+	const playingVideoId = lastPoll && lastPoll.onCycleWatch && !lastPoll.ended ? lastPoll.videoId : null;
+	log(`RandomPlay 1-hour timer fired - exitAfterCurrentChannel: ${exitAfterCurrentChannel}, waitForVideoEnd: ${currentEntry.waitForVideoEnd}, playingVideoId: ${playingVideoId}`);
+	if (currentEntry.waitForVideoEnd && playingVideoId && monitorIntervalID !== null) {
+		pendingSwitchVideoId = playingVideoId;
+		log(`channel switch deferred until current video ends - videoId: ${playingVideoId}`);
+		return;
+	}
+	endChannel('hour elapsed');
+}
+
+// End the current channel (hour elapsed, deferred video ended, or playback stalled): quit if armed,
+// otherwise start the next channel.
+function endChannel(reason) {
+	log(`channel ended - reason: ${reason}, exitAfterCurrentChannel: ${exitAfterCurrentChannel}`);
+	if (exitAfterCurrentChannel) {
+		stopPlaybackMonitor();
+		log('quitting as scheduled instead of selecting the next channel');
+		ipcRenderer.send('window-close');
+		return;
+	}
+	RandomPlay();
 }
 
 // Click a random video from the front portion of the watch-page playlist sidebar.
-// divisor controls the slice: 20 = front 5%, 10 = front 10%.
-function clickRandomFrontVideo(divisor) {
+// divisor controls the slice: 20 = front 5%, 10 = front 10%. Video ids in excludeVideoIds (optional) are
+// never picked; if the front slice holds no other video, the whole panel is used instead.
+function clickRandomFrontVideo(divisor, excludeVideoIds) {
+	const exclude = excludeVideoIds || [];
 	const webViewTranslation = document.getElementById("webViewTranslation");
-	webViewTranslation.executeJavaScript(
-		"var elements = document.getElementsByClassName('yt-simple-endpoint style-scope ytd-playlist-panel-video-renderer'); if (elements.length) { elements[Math.floor(Math.random() * (elements.length / " + divisor + "))].click(); }"
-	);
+	const script = "(function(divisor,exclude){var all=Array.prototype.slice.call(document.getElementsByClassName('yt-simple-endpoint style-scope ytd-playlist-panel-video-renderer'));if(!all.length)return {count:0,href:null};var ok=function(e){try{return exclude.indexOf(new URL(e.href).searchParams.get('v'))<0;}catch(x){return true;}};var c=all.slice(0,Math.ceil(all.length/divisor)).filter(ok);if(!c.length)c=all.filter(ok);if(!c.length)return {count:all.length,href:null};var el=c[Math.floor(Math.random()*c.length)];el.click();return {count:all.length,href:el.href};})(" + divisor + "," + JSON.stringify(exclude) + ")";
+	webViewTranslation.executeJavaScript(script).then((result) => {
+		log(`random video click - divisor: ${divisor}, exclude: ${exclude.join('|')}, panelCount: ${result ? result.count : null}, href: ${result ? result.href : null}`);
+	}).catch((err) => {
+		log(`ERROR random video click failed - error: ${err && err.message ? err.message : err}`);
+	});
 }
 
-// Detect when the first played video reaches its natural end, then pick a random front-5% video.
-// Uses the standard HTML5 media API (more stable than YouTube's internal player API). Robust against
-// playlist autoplay: a capture-phase 'ended' listener on the main player's <video> sets a sticky flag
-// (media events do not bubble, so capture is required, and the flag survives the brief autoplay
-// transition before the next video starts). A direct '#movie_player video'.ended read is the fallback
-// for the already-ended case. Ad playback is excluded via the '.ad-showing' guard, and the listener is
-// scoped to '#movie_player' so hover-preview/mini-player <video> elements do not trigger it. Polled from
-// the host since the webview has no preload IPC bridge.
-function startFirstVideoEndDetection() {
-	const webViewTranslation = document.getElementById("webViewTranslation");
-	const pollScript = "(function(){if(!window.__ytEndHook){window.__ytEndHook=true;window.__ytEnded=false;document.addEventListener('ended',function(e){var t=e.target;if(t&&t.tagName==='VIDEO'&&t.closest('#movie_player')&&!document.querySelector('.ad-showing')){window.__ytEnded=true;}},true);}if(window.__ytEnded)return true;var v=document.querySelector('#movie_player video');if(v&&v.ended&&!document.querySelector('.ad-showing'))return true;return false;})()";
-	let handled = false;
+// Poll script for the playback monitor. Uses the standard HTML5 media API for progress/end. There is no
+// media-API signal for "scheduled live, not started yet", so upcoming-live is detected two ways: the
+// player's getPlayerResponse() (videoDetails.isUpcoming or playability status LIVE_STREAM_OFFLINE), and a
+// rendered '#movie_player .ytp-offline-slate' (the waiting screen with the countdown and notify button).
+// The slate is only counted when it has a layout box, since a hidden slate may stay in the DOM.
+// First-video end: a capture-phase 'ended' listener on the main player's <video> sets a sticky flag (media
+// events do not bubble, so capture is required, and the flag survives the brief autoplay transition). The
+// listener is scoped to '#movie_player' so hover-preview/mini-player <video> elements do not trigger it,
+// and ad endings are excluded via '.ad-showing'.
+const playbackPollScript = "(function(){if(!window.__ytEndHook){window.__ytEndHook=true;window.__ytEnded=false;document.addEventListener('ended',function(e){var t=e.target;if(t&&t.tagName==='VIDEO'&&t.closest('#movie_player')&&!document.querySelector('.ad-showing')){window.__ytEnded=true;}},true);}var p=document.getElementById('movie_player');var v=document.querySelector('#movie_player video');var r=null;try{r=p&&p.getPlayerResponse?p.getPlayerResponse():null;}catch(x){}var vd=r&&r.videoDetails;var ps=r&&r.playabilityStatus;return {endedFlag:!!window.__ytEnded,ended:!!(v&&v.ended),ad:!!document.querySelector('.ad-showing'),time:v?v.currentTime:-1,paused:v?v.paused:null,respVideoId:vd?vd.videoId:null,upcoming:!!(vd&&vd.isUpcoming)||!!(ps&&ps.status==='LIVE_STREAM_OFFLINE'),status:ps?ps.status:null,slate:(function(){var s=document.querySelector('#movie_player .ytp-offline-slate');return !!(s&&s.getClientRects().length);})()};})()";
 
-	endCheckIntervalID = setInterval(() => {
-		webViewTranslation.executeJavaScript(pollScript).then((ended) => {
-			if (ended && !handled) {
-				handled = true;
-				if (endCheckIntervalID !== null) {
-					clearInterval(endCheckIntervalID);
-					endCheckIntervalID = null;
-				}
+// Single 1s poller that runs from watch-page arrival until the next RandomPlay. Responsibilities:
+// 1. First video reaches its natural end -> random front-5% video (once per cycle).
+// 2. Current video is an upcoming live stream -> random other video (once per video id, all excluded).
+// 3. No playback progress on this cycle's playlist for PLAYBACK_STALL_MS -> next channel early.
+// 4. Deferred hour-end switch (waitForVideoEnd) -> endChannel once the pending video changes or ends.
+// Stall and deferral only count while the webview is on a watch page of this cycle's playlist, so a
+// manual navigation from the address bar never triggers an early switch.
+function startPlaybackMonitor() {
+	const webViewTranslation = document.getElementById("webViewTranslation");
+	let firstVideoHandled = false;
+	const upcomingVideoIds = new Set();
+	let lastProgressAt = Date.now();
+	let lastVideoId = null;
+	let lastTime = null;
+	let busy = false;
+
+	const intervalId = setInterval(() => {
+		if (busy) {
+			return;
+		}
+		busy = true;
+		webViewTranslation.executeJavaScript(playbackPollScript).then((state) => {
+			if (monitorIntervalID !== intervalId || !state) {
+				return;
+			}
+			const now = Date.now();
+			let url = null;
+			try {
+				url = new URL(webViewTranslation.getURL());
+			}
+			catch {
+			}
+			const videoId = url ? url.searchParams.get('v') : null;
+			const onCycleWatch = !!(url && url.pathname === '/watch' && videoId && currentListId && url.searchParams.get('list') === currentListId);
+			lastPoll = { onCycleWatch: onCycleWatch, videoId: videoId, ended: state.ended };
+
+			if (!onCycleWatch || state.ad || videoId !== lastVideoId || state.time !== lastTime) {
+				lastProgressAt = now;
+			}
+			lastVideoId = videoId;
+			lastTime = state.time;
+
+			if (pendingSwitchVideoId !== null && (!onCycleWatch || videoId !== pendingSwitchVideoId || state.ended)) {
+				log(`deferred channel switch - pendingVideoId: ${pendingSwitchVideoId}, currentVideoId: ${videoId}, ended: ${state.ended}, onCycleWatch: ${onCycleWatch}`);
+				pendingSwitchVideoId = null;
+				endChannel('deferred video ended');
+				return;
+			}
+
+			if (!onCycleWatch) {
+				return;
+			}
+
+			// Each upcoming id is handled once per cycle and excluded from every later pick, so two upcoming
+			// videos cannot bounce between each other. If a pick fails, the stall check switches the channel.
+			const upcoming = (state.upcoming && state.respVideoId === videoId) || state.slate;
+			if (upcoming && !upcomingVideoIds.has(videoId)) {
+				upcomingVideoIds.add(videoId);
+				lastProgressAt = now;
+				log(`upcoming live detected - videoId: ${videoId}, respUpcoming: ${state.upcoming}, respVideoId: ${state.respVideoId}, slate: ${state.slate}, status: ${state.status}, selecting another random video`);
+				clickRandomFrontVideo(20, Array.from(upcomingVideoIds));
+				return;
+			}
+
+			if (!firstVideoHandled && (state.endedFlag || (state.ended && !state.ad))) {
+				firstVideoHandled = true;
 				log('first video ended - selecting random front-5% video');
-				clickRandomFrontVideo(20);
+				clickRandomFrontVideo(20, Array.from(upcomingVideoIds));
+				return;
+			}
+
+			if (now - lastProgressAt >= PLAYBACK_STALL_MS) {
+				log(`playback stalled - switching channel early - videoId: ${videoId}, time: ${state.time}, paused: ${state.paused}, ended: ${state.ended}, status: ${state.status}, upcoming: ${state.upcoming}, slate: ${state.slate}, stalledMs: ${now - lastProgressAt}, pendingSwitch: ${pendingSwitchVideoId !== null}`);
+				const reason = pendingSwitchVideoId !== null ? 'deferred video stalled' : 'playback stalled';
+				pendingSwitchVideoId = null;
+				endChannel(reason);
 			}
 		}).catch((err) => {
-			log(`ERROR end-detection poll failed - error: ${err && err.message ? err.message : err}`);
+			log(`ERROR playback monitor poll failed - error: ${err && err.message ? err.message : err}`);
+		}).finally(() => {
+			busy = false;
 		});
-	}, 1000);
+	}, PLAYBACK_MONITOR_INTERVAL_MS);
+	monitorIntervalID = intervalId;
+	log(`playback monitor started - listId: ${currentListId}, stallMs: ${PLAYBACK_STALL_MS}`);
 }
 
 async function OnTextBoxAddressKeyDown(event) {
@@ -383,7 +512,7 @@ function OnWebViewTranslationDidNavigate() {
 	}
 }
 
-// Handle arrival on a YouTube watch page: stop the play-all click interval and start end detection.
+// Handle arrival on a YouTube watch page: stop the play-all click interval and start the playback monitor.
 // Must run for in-page (SPA) transitions too. The playlist to watch transition frequently happens as a
 // history navigation, which does not fire did-frame-finish-load, so handling it only there left the 1s
 // play-all interval running and it kept reloading the same video once per second.
@@ -399,9 +528,8 @@ function handleWatchPageReached() {
 
 	clearPlayAllInterval('watch page reached');
 
-	if (click == false) {
-		click = true;
-		startFirstVideoEndDetection();
+	if (monitorIntervalID === null) {
+		startPlaybackMonitor();
 	}
 }
 
