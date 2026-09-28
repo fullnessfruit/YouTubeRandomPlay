@@ -15,8 +15,7 @@
 ---
 
 ## 의뢰자(사람) 측에서만 수행 가능한 작업(AI 측은 모두 완료 대기)
-- 앱 재시작 후 최상위 유지/라이브 예고 건너뛰기/재생 정지 시 채널 전환/초기 크기 86x234 동작 확인 (debug.log의 `upcoming live detected`, `playback stalled`, `channel switch deferred` 확인)
-- 영상 종료 후 전환을 원하는 채널 URL을 `["url", true]` 형식으로 변경
+- 앱 재시작 후 최상위 유지/라이브 예고 건너뛰기/재생 정지 시 채널 전환/초기 크기 86x234/종료 예약 중 정지 시 대기 동작 확인 (debug.log의 `upcoming live detected`, `playback stalled`, `channel switch deferred`, `holding until scheduled quit` 확인)
 
 ## 지시(진행 중)
 

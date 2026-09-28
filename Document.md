@@ -149,7 +149,7 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 - `pendingSwitchVideoId` - 1시간 경과 후 `waitForVideoEnd`로 전환을 미룬 경우 끝나기를 기다리는 영상 id. null이면 대기 없음
 - `lastPoll` - 모니터의 최신 폴링 결과 `{ onCycleWatch, videoId, ended }`. 1시간 타이머 발화 시 "지금 재생 중인 영상"을 판단하는 데 사용
 - `lastNavigatedUrl`, `sameUrlNavCount` - 직전 내비게이션 URL과 연속 동일 URL 횟수 (내비게이션 로깅용)
-- `exitAfterCurrentChannel` (boolean) - 현재 채널이 끝나면(1시간 경과 또는 재생 정지) 다음 채널로 넘어가지 않고 프로그램을 종료할지 여부. 타이틀바 토글 버튼으로 설정하며, `endChannel()`에서만 읽음
+- `exitAfterCurrentChannel` (boolean) - 현재 채널의 1시간이 끝나면 다음 채널로 넘어가지 않고 프로그램을 종료할지 여부. 타이틀바 토글 버튼으로 설정하며, `endChannel()`과 재생 모니터의 정지 분기에서 읽음
 
 **상수**: `PLAYBACK_MONITOR_INTERVAL_MS`(1000), `PLAYBACK_STALL_MS`(60000)
 
@@ -184,8 +184,8 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 - 그 외에는 즉시 `endChannel('hour elapsed')`
 
 `endChannel(reason)`
-- 채널 종료 지점(1시간 경과, 미뤄둔 영상 종료, 재생 정지) 처리. `exitAfterCurrentChannel`이 true이면 모니터 정지 후 `window-close` IPC로 종료, false이면 `RandomPlay()`
-- 종료 예약을 확인하는 지점이 여기뿐이므로 토글을 켜도 재생 중인 채널은 중단되지 않음. 재생 정지로 인한 조기 전환도 `endChannel`을 거치므로, 예약 중이면 다음 채널로 넘어가지 않고 그 시점에 바로 종료
+- 채널의 예정된 종료 지점(1시간 경과, 또는 미뤄둔 영상의 종료/정지) 처리. `exitAfterCurrentChannel`이 true이면 모니터 정지 후 `window-close` IPC로 종료, false이면 `RandomPlay()`
+- 종료 예약을 확인하는 지점이 여기뿐이므로 토글을 켜도 재생 중인 채널은 중단되지 않음. 재생 정지로 인한 조기 전환은 `endChannel`을 거치지 않음 (재생 모니터 4번 참조)
 
 `OnExitAfterBtnClick()`
 - `exitAfterCurrentChannel`을 토글하고 `#exitAfterBtn`에 `active` CSS 클래스를 반영. `exit-after-current-channel toggled` 로그
@@ -203,12 +203,14 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 
 `startPlaybackMonitor()`
 - watch 페이지 도달 시 시작해 다음 `RandomPlay()`까지 도는 **유일한 1초 폴러** (최초 영상 종료 감지를 겸함). `busy` 가드로 executeJavaScript 응답 전 중복 폴링 방지, 응답 도착 시 `monitorIntervalID`가 바뀌었으면(사이클 교체) 결과 폐기
-- `onCycleWatch` = URL이 `/watch`이고 `list`가 `currentListId`와 일치. 주소창 수동 내비게이션 중에는 false이므로 정지/예고 판정이 동작하지 않음 (진행 타이머도 계속 리셋)
+- `playlistId` = watch URL의 `list` 파라미터(없으면 null), `onCycleWatch` = `playlistId`가 `currentListId`와 일치
+- **판정 범위의 비자명한 결정**: 라이브 예고 건너뛰기는 같은 재생목록 안에서 다른 영상을 고를 뿐이므로 `playlistId`만 있으면(주소창으로 직접 연 재생목록 포함) 동작. 반면 최초 영상 종료 점프, 정지 시 채널 전환, 미뤄둔 전환은 `onCycleWatch`일 때만 동작해 수동 시청 중 채널이 바뀌지 않게 함 (`onCycleWatch`가 아니면 진행 타이머도 계속 리셋)
 - 처리 순서:
   1. **미뤄둔 전환**: `pendingSwitchVideoId`가 있고 영상 id가 바뀌었거나 `ended`이거나 `onCycleWatch`가 아니면 `endChannel('deferred video ended')`
-  2. **라이브 예고**: 예고 판정이고 이번 사이클에 처리하지 않은 id면 Set에 추가 후 `clickRandomFrontVideo(20, 예고 id 전체)`. 처리한 예고 id를 모두 제외하므로 예고 2개가 서로를 고르며 무한 왕복하지 않음. 클릭이 실패해 그대로 멈춰 있으면 아래 정지 판정이 채널을 바꿈
+  2. **라이브 예고** (`playlistId` 필요, `onCycleWatch` 불필요): 예고 판정이고 이번 사이클에 처리하지 않은 id면 Set에 추가 후 `clickRandomFrontVideo(20, 예고 id 전체)`. 처리한 예고 id를 모두 제외하므로 예고 2개가 서로를 고르며 무한 왕복하지 않음. 클릭이 실패해 그대로 멈춰 있으면 이번 사이클 재생목록인 경우 아래 정지 판정이 채널을 바꿈. `list`가 없는 단일 영상 예고는 고를 대상이 없어 제외
+  - 이후 3, 4는 `onCycleWatch`일 때만
   3. **최초 영상 종료**: 사이클당 1회 `clickRandomFrontVideo(20, 예고 id 전체)` (앞 5%)
-  4. **재생 정지**: 영상 id 또는 `currentTime`이 `PLAYBACK_STALL_MS`(60초) 동안 변하지 않으면(광고 재생 중은 진행으로 간주) 1시간 전이라도 `endChannel('playback stalled')`로 채널 종료(예약 중이면 프로그램 종료). 재생목록 끝에서 자동재생이 멈춘 경우, "계속 시청하시겠습니까?" 등으로 정지한 경우, 첫 영상이 시작조차 안 된 경우를 모두 포괄. 전환 대기 중(`pendingSwitchVideoId`)에 정지하면 `endChannel('deferred video stalled')`
+  4. **재생 정지**: 영상 id 또는 `currentTime`이 `PLAYBACK_STALL_MS`(60초) 동안 변하지 않으면(광고 재생 중은 진행으로 간주) 1시간 전이라도 `RandomPlay()`로 채널 전환. **종료 예약 중이면 즉시 종료도 채널 전환도 하지 않고** 1시간 타이머가 예정대로 종료할 때까지 대기 (`holding until scheduled quit`을 정지 구간당 1회 기록, 대기 중 예약을 해제하면 다음 폴링에서 채널 전환). 재생목록 끝에서 자동재생이 멈춘 경우, "계속 시청하시겠습니까?" 등으로 정지한 경우, 첫 영상이 시작조차 안 된 경우를 모두 포괄. 전환 대기 중(`pendingSwitchVideoId`)에 정지하면 1시간은 이미 지났으므로 `endChannel('deferred video stalled')` (예약 중이면 종료)
 - `playback stalled` 로그에 videoId/time/paused/ended/status/upcoming/slate를 함께 남겨 정지 원인을 사후 분석 가능
 - webview에 preload IPC 브리지가 없어 호스트에서 폴링하는 구조
 

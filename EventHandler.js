@@ -187,8 +187,8 @@ function OnChannelHourElapsed() {
 	endChannel('hour elapsed');
 }
 
-// End the current channel (hour elapsed, deferred video ended, or playback stalled): quit if armed,
-// otherwise start the next channel.
+// End the current channel at its scheduled point (hour elapsed, or the deferred video ended/stalled):
+// quit if armed, otherwise start the next channel.
 function endChannel(reason) {
 	log(`channel ended - reason: ${reason}, exitAfterCurrentChannel: ${exitAfterCurrentChannel}`);
 	if (exitAfterCurrentChannel) {
@@ -227,11 +227,13 @@ const playbackPollScript = "(function(){if(!window.__ytEndHook){window.__ytEndHo
 
 // Single 1s poller that runs from watch-page arrival until the next RandomPlay. Responsibilities:
 // 1. First video reaches its natural end -> random front-5% video (once per cycle).
-// 2. Current video is an upcoming live stream -> random other video (once per video id, all excluded).
-// 3. No playback progress on this cycle's playlist for PLAYBACK_STALL_MS -> next channel early.
+// 2. Current video is an upcoming live stream on any playlist watch page -> random other video (once per
+//    video id, all excluded).
+// 3. No playback progress on this cycle's playlist for PLAYBACK_STALL_MS -> next channel early. When a
+//    quit is armed, it neither quits nor switches: it holds until the 1-hour timer quits as scheduled.
 // 4. Deferred hour-end switch (waitForVideoEnd) -> endChannel once the pending video changes or ends.
-// Stall and deferral only count while the webview is on a watch page of this cycle's playlist, so a
-// manual navigation from the address bar never triggers an early switch.
+// First-video end, stall and deferral only count while the webview is on a watch page of this cycle's
+// playlist, so a manual navigation from the address bar never triggers an early channel switch.
 function startPlaybackMonitor() {
 	const webViewTranslation = document.getElementById("webViewTranslation");
 	let firstVideoHandled = false;
@@ -239,6 +241,7 @@ function startPlaybackMonitor() {
 	let lastProgressAt = Date.now();
 	let lastVideoId = null;
 	let lastTime = null;
+	let stallHoldLogged = false;
 	let busy = false;
 
 	const intervalId = setInterval(() => {
@@ -258,11 +261,13 @@ function startPlaybackMonitor() {
 			catch {
 			}
 			const videoId = url ? url.searchParams.get('v') : null;
-			const onCycleWatch = !!(url && url.pathname === '/watch' && videoId && currentListId && url.searchParams.get('list') === currentListId);
+			const playlistId = url && url.pathname === '/watch' && videoId ? url.searchParams.get('list') : null;
+			const onCycleWatch = !!(playlistId && currentListId && playlistId === currentListId);
 			lastPoll = { onCycleWatch: onCycleWatch, videoId: videoId, ended: state.ended };
 
 			if (!onCycleWatch || state.ad || videoId !== lastVideoId || state.time !== lastTime) {
 				lastProgressAt = now;
+				stallHoldLogged = false;
 			}
 			lastVideoId = videoId;
 			lastTime = state.time;
@@ -274,18 +279,20 @@ function startPlaybackMonitor() {
 				return;
 			}
 
-			if (!onCycleWatch) {
+			// Upcoming skip applies to any playlist watch page, including one opened from the address bar,
+			// since it only picks another video within the same playlist. Each upcoming id is handled once per
+			// cycle and excluded from every later pick, so two upcoming videos cannot bounce between each other.
+			// If a pick fails on this cycle's playlist, the stall check switches the channel.
+			const upcoming = (state.upcoming && state.respVideoId === videoId) || state.slate;
+			if (playlistId && upcoming && !upcomingVideoIds.has(videoId)) {
+				upcomingVideoIds.add(videoId);
+				lastProgressAt = now;
+				log(`upcoming live detected - videoId: ${videoId}, listId: ${playlistId}, onCycleWatch: ${onCycleWatch}, respUpcoming: ${state.upcoming}, respVideoId: ${state.respVideoId}, slate: ${state.slate}, status: ${state.status}, selecting another random video`);
+				clickRandomFrontVideo(20, Array.from(upcomingVideoIds));
 				return;
 			}
 
-			// Each upcoming id is handled once per cycle and excluded from every later pick, so two upcoming
-			// videos cannot bounce between each other. If a pick fails, the stall check switches the channel.
-			const upcoming = (state.upcoming && state.respVideoId === videoId) || state.slate;
-			if (upcoming && !upcomingVideoIds.has(videoId)) {
-				upcomingVideoIds.add(videoId);
-				lastProgressAt = now;
-				log(`upcoming live detected - videoId: ${videoId}, respUpcoming: ${state.upcoming}, respVideoId: ${state.respVideoId}, slate: ${state.slate}, status: ${state.status}, selecting another random video`);
-				clickRandomFrontVideo(20, Array.from(upcomingVideoIds));
+			if (!onCycleWatch) {
 				return;
 			}
 
@@ -297,10 +304,25 @@ function startPlaybackMonitor() {
 			}
 
 			if (now - lastProgressAt >= PLAYBACK_STALL_MS) {
-				log(`playback stalled - switching channel early - videoId: ${videoId}, time: ${state.time}, paused: ${state.paused}, ended: ${state.ended}, status: ${state.status}, upcoming: ${state.upcoming}, slate: ${state.slate}, stalledMs: ${now - lastProgressAt}, pendingSwitch: ${pendingSwitchVideoId !== null}`);
-				const reason = pendingSwitchVideoId !== null ? 'deferred video stalled' : 'playback stalled';
-				pendingSwitchVideoId = null;
-				endChannel(reason);
+				const stallInfo = `videoId: ${videoId}, time: ${state.time}, paused: ${state.paused}, ended: ${state.ended}, status: ${state.status}, upcoming: ${state.upcoming}, slate: ${state.slate}, stalledMs: ${now - lastProgressAt}`;
+				if (pendingSwitchVideoId !== null) {
+					// The hour is already over; the stall only ends the wait for the current video.
+					log(`playback stalled - ending deferred channel - ${stallInfo}`);
+					pendingSwitchVideoId = null;
+					endChannel('deferred video stalled');
+				}
+				else if (exitAfterCurrentChannel) {
+					// A quit is armed: keep the channel until the 1-hour timer quits on schedule. Logged once per
+					// stall episode. If the quit is disarmed while still stalled, the next poll switches channel.
+					if (!stallHoldLogged) {
+						stallHoldLogged = true;
+						log(`playback stalled - holding until scheduled quit - ${stallInfo}`);
+					}
+				}
+				else {
+					log(`playback stalled - switching channel early - ${stallInfo}`);
+					RandomPlay();
+				}
 			}
 		}).catch((err) => {
 			log(`ERROR playback monitor poll failed - error: ${err && err.message ? err.message : err}`);
