@@ -227,11 +227,45 @@ function clickRandomFrontVideo(divisor, excludeVideoIds, attempt = 1) {
 // player's getPlayerResponse() (videoDetails.isUpcoming or playability status LIVE_STREAM_OFFLINE), and a
 // rendered '#movie_player .ytp-offline-slate' (the countdown screen or collapsed offline message).
 // The slate is only counted when it has a layout box, since a hidden slate may stay in the DOM.
+// Its background thumbnail identifies which video the slate belongs to independently of the response.
 // First-video end: a capture-phase 'ended' listener on the main player's <video> sets a sticky flag (media
 // events do not bubble, so capture is required, and the flag survives the brief autoplay transition). The
 // listener is scoped to '#movie_player' so hover-preview/mini-player <video> elements do not trigger it,
 // and ad endings are excluded via '.ad-showing'.
-const playbackPollScript = "(function(){if(!window.__ytEndHook){window.__ytEndHook=true;window.__ytEnded=false;document.addEventListener('ended',function(e){var t=e.target;if(t&&t.tagName==='VIDEO'&&t.closest('#movie_player')&&!document.querySelector('.ad-showing')){window.__ytEnded=true;}},true);}var p=document.getElementById('movie_player');var v=document.querySelector('#movie_player video');var r=null;try{r=p&&p.getPlayerResponse?p.getPlayerResponse():null;}catch(x){}var vd=r&&r.videoDetails;var ps=r&&r.playabilityStatus;return {endedFlag:!!window.__ytEnded,ended:!!(v&&v.ended),ad:!!document.querySelector('.ad-showing'),time:v?v.currentTime:-1,paused:v?v.paused:null,respVideoId:vd?vd.videoId:null,upcoming:!!(vd&&vd.isUpcoming)||!!(ps&&ps.status==='LIVE_STREAM_OFFLINE'),status:ps?ps.status:null,slate:(function(){var s=document.querySelector('#movie_player .ytp-offline-slate');return !!(s&&s.getClientRects().length);})()};})()";
+const playbackPollScript = `(function() {
+	if (!window.__ytEndHook) {
+		window.__ytEndHook = true;
+		window.__ytEnded = false;
+		document.addEventListener('ended', function(e) {
+			var t = e.target;
+			if (t && t.tagName === 'VIDEO' && t.closest('#movie_player') && !document.querySelector('.ad-showing')) {
+				window.__ytEnded = true;
+			}
+		}, true);
+	}
+	var p = document.getElementById('movie_player');
+	var v = document.querySelector('#movie_player video');
+	var r = null;
+	try { r = p && p.getPlayerResponse ? p.getPlayerResponse() : null; } catch (x) {}
+	var vd = r && r.videoDetails;
+	var ps = r && r.playabilityStatus;
+	var s = document.querySelector('#movie_player .ytp-offline-slate');
+	var background = s && s.querySelector('.ytp-offline-slate-background');
+	var thumbnailPath = background ? background.style.backgroundImage.split('/vi/')[1] : null;
+	var slateVideoId = thumbnailPath && thumbnailPath.indexOf('/') > 0 ? thumbnailPath.split('/')[0] : null;
+	return {
+		endedFlag: !!window.__ytEnded,
+		ended: !!(v && v.ended),
+		ad: !!document.querySelector('.ad-showing'),
+		time: v ? v.currentTime : -1,
+		paused: v ? v.paused : null,
+		respVideoId: vd ? vd.videoId : null,
+		upcoming: !!(vd && vd.isUpcoming) || !!(ps && ps.status === 'LIVE_STREAM_OFFLINE'),
+		status: ps ? ps.status : null,
+		slate: !!(s && s.getClientRects().length),
+		slateVideoId: slateVideoId
+	};
+})()`;
 
 // Single 1s poller that runs from watch-page arrival until the next RandomPlay. Responsibilities:
 // 1. First video reaches its natural end -> random front-5% video (once per cycle).
@@ -292,10 +326,11 @@ function startPlaybackMonitor() {
 				return;
 			}
 
-			// The slate and player response can both belong to the previous video during SPA navigation.
-			// Use the visible slate alone only when the response has no video id to compare.
+			// The response and slate update independently during SPA navigation. Prefer the slate's own
+			// thumbnail id; only use the response as a fallback when the slate has no identifiable thumbnail.
 			const responseMatches = state.respVideoId === videoId;
-			const upcoming = (state.upcoming && responseMatches) || (state.slate && (!state.respVideoId || responseMatches));
+			const slateMatches = state.slateVideoId ? state.slateVideoId === videoId : (!state.respVideoId || responseMatches);
+			const upcoming = (state.upcoming && responseMatches) || (state.slate && slateMatches);
 			// This also applies to manually opened playlists. Keep exclusions separate from successful skips:
 			// the offline screen may appear before the sidebar. Failed picks retry without resetting the stall
 			// timer, so an empty/unavailable playlist still reaches the existing stall/quit handling.
@@ -303,7 +338,7 @@ function startPlaybackMonitor() {
 				if (!upcomingVideoIds.has(videoId)) {
 					upcomingVideoIds.add(videoId);
 					lastProgressAt = now;
-					log(`upcoming live detected - videoId: ${videoId}, listId: ${playlistId}, onCycleWatch: ${onCycleWatch}, respUpcoming: ${state.upcoming}, respVideoId: ${state.respVideoId}, slate: ${state.slate}, status: ${state.status}, selecting another random video`);
+					log(`upcoming live detected - videoId: ${videoId}, listId: ${playlistId}, onCycleWatch: ${onCycleWatch}, respUpcoming: ${state.upcoming}, respVideoId: ${state.respVideoId}, slate: ${state.slate}, slateVideoId: ${state.slateVideoId}, status: ${state.status}, selecting another random video`);
 				}
 				const result = await clickRandomFrontVideo(20, Array.from(upcomingVideoIds), ++upcomingSkipAttempts);
 				if (monitorIntervalID !== intervalId) {
@@ -330,7 +365,7 @@ function startPlaybackMonitor() {
 			}
 
 			if (now - lastProgressAt >= PLAYBACK_STALL_MS) {
-				const stallInfo = `videoId: ${videoId}, time: ${state.time}, paused: ${state.paused}, ended: ${state.ended}, status: ${state.status}, upcoming: ${state.upcoming}, slate: ${state.slate}, stalledMs: ${now - lastProgressAt}`;
+				const stallInfo = `videoId: ${videoId}, time: ${state.time}, paused: ${state.paused}, ended: ${state.ended}, status: ${state.status}, upcoming: ${state.upcoming}, slate: ${state.slate}, slateVideoId: ${state.slateVideoId}, stalledMs: ${now - lastProgressAt}`;
 				if (pendingSwitchVideoId !== null) {
 					// The hour is already over; the stall only ends the wait for the current video.
 					log(`playback stalled - ending deferred channel - ${stallInfo}`);

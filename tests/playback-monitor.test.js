@@ -4,8 +4,8 @@ const path = require('path');
 const vm = require('vm');
 
 const source = fs.readFileSync(process.argv[2] || path.join(__dirname, '..', 'EventHandler.js'), 'utf8');
-const playlistId = 'UURAP6PI9-BnPH3tYqWy1NKA';
-const offlineId = '96PNoLt1hXU';
+const playlistId = 'testPlaylist';
+const offlineId = 'offline0001';
 const watchUrl = (videoId, listId = playlistId) => `https://www.youtube.com/watch?v=${videoId}&list=${listId}`;
 
 // Run the real host and injected scripts with a delayed sidebar, controlled clock and no Electron.
@@ -22,6 +22,7 @@ function createPlayback() {
 		clicks: [],
 		clickRequests: 0,
 		clickFailures: 0,
+		slateBackgroundImage: '',
 		logs: [],
 		loads: [],
 		ipc: []
@@ -36,7 +37,13 @@ function createPlayback() {
 			querySelector: (selector) => {
 				if (selector === '#movie_player video') return playback.media;
 				if (selector === '#movie_player .ytp-offline-slate') {
-					return { getClientRects: () => playback.slateVisible ? [{}] : [] };
+					return {
+						getClientRects: () => playback.slateVisible ? [{}] : [],
+						querySelector: (selector) => {
+							if (selector !== '.ytp-offline-slate-background') return null;
+							return { style: { backgroundImage: playback.slateBackgroundImage } };
+						}
+					};
 				}
 				return null;
 			},
@@ -199,6 +206,25 @@ const tests = [
 		assert.deepStrictEqual(playback.clicks, ['playable']);
 		await playback.poll();
 		assert.strictEqual(playback.clickRequests, 3);
+	}],
+	['recognize the current slate even when the response still belongs to the previous video', async () => {
+		const playback = createPlayback();
+		playback.response.videoDetails.videoId = 'previousVideo';
+		playback.slateBackgroundImage = `url("https://i.ytimg.com/vi/${offlineId}/maxresdefault.jpg")`;
+		playback.sidebar = [offlineId, 'playable'];
+		await playback.poll();
+		assert.deepStrictEqual(playback.clicks, ['playable']);
+	}],
+	['ignore the previous slate even after the player response changes to a playable video', async () => {
+		const playback = createPlayback();
+		playback.url = watchUrl('playable');
+		playback.response.videoDetails.videoId = 'playable';
+		playback.response.videoDetails.isUpcoming = false;
+		playback.response.playabilityStatus.status = 'OK';
+		playback.slateBackgroundImage = `url("https://i.ytimg.com/vi/${offlineId}/maxresdefault.jpg")`;
+		playback.sidebar = [offlineId, 'playable'];
+		await playback.poll();
+		assert.deepStrictEqual(playback.clicks, []);
 	}]
 ];
 

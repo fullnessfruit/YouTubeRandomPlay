@@ -198,9 +198,10 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 - 결과(panelCount, 클릭한 href, attempt)를 `random video click` 1줄로 기록. 클릭 성공은 항상 기록하고, 클릭하지 못했거나 실행에 실패한 경우에는 1회차와 30회마다만 기록. 재생 모니터가 현재 영상의 시도 횟수를 전달
 
 `playbackPollScript` (게스트에 주입하는 폴링 스크립트)
-- 반환: `endedFlag`, `ended`, `ad`, `time`(currentTime), `paused`, `respVideoId`, `upcoming`, `status`, `slate`
+- 반환: `endedFlag`, `ended`, `ad`, `time`(currentTime), `paused`, `respVideoId`, `upcoming`, `status`, `slate`, `slateVideoId`
 - **종료 감지는 표준 HTML5 미디어 API** (YouTube 내부 `getPlayerState`보다 안정적). capture 단계 `ended` 리스너를 1회 주입해 sticky 플래그(`window.__ytEnded`) 설정. media 이벤트는 버블링되지 않아 document capture 필수이며, 자동재생으로 종료 상태가 짧게 스쳐도 플래그로 포착. `#movie_player video`의 `.ended`를 폴백으로 사용. `#movie_player` 내부 video로 한정해 hover 미리보기/미니플레이어 오탐 방지, `.ad-showing` 시 광고 종료 제외. 이 sticky 플래그는 페이지 컨텍스트 수명 동안 유지되므로 "최초 영상 종료" 판정에만 사용
-- **라이브 대기/오프라인 판정 (미디어 API로는 "예약됨, 미시작"을 알 수 없음)**: (a) `#movie_player.getPlayerResponse()`의 `videoDetails.isUpcoming` 또는 `playabilityStatus.status === 'LIVE_STREAM_OFFLINE'` (b) `#movie_player .ytp-offline-slate`가 레이아웃 박스를 가짐(`getClientRects().length`). 카운트다운 화면과 `ライブ ストリームはオフラインです`라는 축소 슬레이트 모두 같은 클래스 경로로 감지하며 문구에 의존하지 않음. 슬레이트는 숨겨진 채 DOM에 남을 수 있어 표시 여부로 판정. SPA 전환 직후에는 응답과 슬레이트가 모두 이전 영상의 것일 수 있으므로, 호스트에서 `respVideoId`가 URL의 `v`와 다르면 둘 다 채택하지 않음. 응답의 영상 id를 얻을 수 없으면 표시 중인 슬레이트만으로 판정
+- **라이브 대기/오프라인 판정 (미디어 API로는 "예약됨, 미시작"을 알 수 없음)**: (a) `#movie_player.getPlayerResponse()`의 `videoDetails.isUpcoming` 또는 `playabilityStatus.status === 'LIVE_STREAM_OFFLINE'` (b) `#movie_player .ytp-offline-slate`가 레이아웃 박스를 가짐(`getClientRects().length`). 카운트다운 화면과 `ライブ ストリームはオフラインです`라는 축소 슬레이트 모두 같은 클래스 경로로 감지하며 문구에 의존하지 않음. 슬레이트는 숨겨진 채 DOM에 남을 수 있어 표시 여부로 판정
+- **SPA 전환 시 신호별 영상 식별**: 응답과 슬레이트는 서로 다른 시점에 갱신됨. 응답은 `respVideoId`가 URL의 `v`와 같을 때만 채택. 슬레이트는 내부 `.ytp-offline-slate-background`의 `style.backgroundImage`에서 `/vi/<videoId>/` 경로를 읽어 `slateVideoId`를 반환하고, 이 id가 현재 URL과 같을 때 채택. 따라서 이전 영상의 응답이 남아도 현재 영상의 오프라인 화면을 감지하고, 새 영상의 응답이 도착해도 이전 영상의 슬레이트를 새 영상으로 오인하지 않음. 배경에서 id를 얻지 못하면 응답 id가 현재 URL과 같거나 응답 id 자체가 없는 경우에만 표시 중인 슬레이트를 채택
 
 `startPlaybackMonitor()`
 - watch 페이지 도달 시 시작해 다음 `RandomPlay()`까지 도는 **유일한 1초 폴러** (최초 영상 종료 감지를 겸함). `busy` 가드로 폴링 및 라이브 건너뛰기 클릭 응답을 기다리는 동안 중복 실행 방지. 각 응답 도착 시 `monitorIntervalID`가 바뀌었으면(사이클 교체) 결과 폐기. 클릭 실패 응답이 도착했을 때 URL이 바뀌었다면 이전 페이지 상태로 정지 여부를 판단하지 않음
@@ -212,7 +213,7 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
   - 이후 3, 4는 `onCycleWatch`일 때만
   3. **최초 영상 종료**: 사이클당 1회 `clickRandomFrontVideo(20, 예고 id 전체)` (앞 5%). 라이브 대기/오프라인으로 판정된 동안에는 처리하지 않아 이전 영상의 sticky 종료 플래그가 건너뛰기 재시도와 중복 클릭을 일으키지 않도록 함
   4. **재생 정지**: 영상 id 또는 `currentTime`이 `PLAYBACK_STALL_MS`(60초) 동안 변하지 않으면(광고 재생 중은 진행으로 간주) 1시간 전이라도 `RandomPlay()`로 채널 전환. **종료 예약 중이면 즉시 종료도 채널 전환도 하지 않고** 1시간 타이머가 예정대로 종료할 때까지 대기 (`holding until scheduled quit`을 정지 구간당 1회 기록, 대기 중 예약을 해제하면 다음 폴링에서 채널 전환). 재생목록 끝에서 자동재생이 멈춘 경우, "계속 시청하시겠습니까?" 등으로 정지한 경우, 첫 영상이 시작조차 안 된 경우를 모두 포괄. 전환 대기 중(`pendingSwitchVideoId`)에 정지하면 1시간은 이미 지났으므로 `endChannel('deferred video stalled')` (예약 중이면 종료)
-- `playback stalled` 로그에 videoId/time/paused/ended/status/upcoming/slate를 함께 남겨 정지 원인을 사후 분석 가능
+- `playback stalled` 로그에 videoId/time/paused/ended/status/upcoming/slate/slateVideoId를 함께 남겨 정지 원인을 사후 분석 가능. `upcoming live detected`도 respVideoId와 slateVideoId를 함께 기록하여 전환 중 어느 신호로 감지했는지 확인 가능
 - webview에 preload IPC 브리지가 없어 호스트에서 폴링하는 구조
 
 **진단 로깅 아키텍처**
@@ -274,8 +275,8 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 ### tests/playback-monitor.test.js
 **역할**: Electron 실행 없이 실제 `EventHandler.js`와 게스트 주입 스크립트를 함께 검증하는 회귀 테스트. `node tests/playback-monitor.test.js`로 실행하며 추가 패키지가 필요하지 않음. 선택적으로 소스 파일 경로를 인자로 받아 수정 전 코드에서도 같은 실패가 재현되는지 확인 가능
 
-- `createPlayback()` - 호스트/게스트를 별도 Node VM 컨텍스트에서 실행하고 시간, 사이드바 준비 시점, 플레이어 응답, 클릭 실패를 제어. 내비게이션·클릭·IPC·로그를 수집하여 비동기 폴링 결과를 확인. 실제 Chromium 레이아웃과 YouTube 네트워크 동작은 검증하지 않음
-- 테스트 실행부 - 목록 표시 지연 후 재시도, 이전 영상 응답에 의한 오탐 방지, 응답 없는 슬레이트 감지, 숨겨진 슬레이트 무시, 대기 영상 누적 제외, 실행 실패 재시도, 60초 정지 및 로그 제한, 종료 예약, 수동 재생목록, 최초 종료 플래그와의 중복 클릭 방지를 순차 검증. 단언 실패 시 종료 코드 1
+- `createPlayback()` - 호스트/게스트를 별도 Node VM 컨텍스트에서 실행하고 시간, 사이드바 준비 시점, 플레이어 응답, 클릭 실패를 제어. 가상 영상 id와 모의 DOM을 사용하며 별도 테스트 데이터 파일이 필요하지 않음. 내비게이션·클릭·IPC·로그를 수집하여 비동기 폴링 결과를 확인. 실제 Chromium 렌더링과 YouTube 네트워크 동작은 검증하지 않음
+- 테스트 실행부 - 목록 표시 지연 후 재시도, 이전 영상 응답에 의한 오탐 방지, 응답 없는 슬레이트 감지, 숨겨진 슬레이트 무시, 대기 영상 누적 제외, 실행 실패 재시도, 60초 정지 및 로그 제한, 종료 예약, 수동 재생목록, 최초 종료 플래그와의 중복 클릭 방지를 순차 검증. 응답/슬레이트의 갱신 순서가 다른 두 전환 상황도 검증. 단언 실패 시 종료 코드 1
 
 ---
 
