@@ -203,21 +203,29 @@ function endChannel(reason) {
 // Click a random video from the front portion of the watch-page playlist sidebar.
 // divisor controls the slice: 20 = front 5%, 10 = front 10%. Video ids in excludeVideoIds (optional) are
 // never picked; if the front slice holds no other video, the whole panel is used instead.
-function clickRandomFrontVideo(divisor, excludeVideoIds) {
+// Return the click result so callers can retry when the sidebar has not rendered yet. Repeated failures
+// are logged on the first attempt and every 30th attempt; successful clicks are always logged.
+function clickRandomFrontVideo(divisor, excludeVideoIds, attempt = 1) {
 	const exclude = excludeVideoIds || [];
 	const webViewTranslation = document.getElementById("webViewTranslation");
 	const script = "(function(divisor,exclude){var all=Array.prototype.slice.call(document.getElementsByClassName('yt-simple-endpoint style-scope ytd-playlist-panel-video-renderer'));if(!all.length)return {count:0,href:null};var ok=function(e){try{return exclude.indexOf(new URL(e.href).searchParams.get('v'))<0;}catch(x){return true;}};var c=all.slice(0,Math.ceil(all.length/divisor)).filter(ok);if(!c.length)c=all.filter(ok);if(!c.length)return {count:all.length,href:null};var el=c[Math.floor(Math.random()*c.length)];el.click();return {count:all.length,href:el.href};})(" + divisor + "," + JSON.stringify(exclude) + ")";
-	webViewTranslation.executeJavaScript(script).then((result) => {
-		log(`random video click - divisor: ${divisor}, exclude: ${exclude.join('|')}, panelCount: ${result ? result.count : null}, href: ${result ? result.href : null}`);
+	return webViewTranslation.executeJavaScript(script).then((result) => {
+		if (attempt === 1 || attempt % 30 === 0 || (result && result.href)) {
+			log(`random video click - divisor: ${divisor}, exclude: ${exclude.join('|')}, panelCount: ${result ? result.count : null}, href: ${result ? result.href : null}, attempt: ${attempt}`);
+		}
+		return result;
 	}).catch((err) => {
-		log(`ERROR random video click failed - error: ${err && err.message ? err.message : err}`);
+		if (attempt === 1 || attempt % 30 === 0) {
+			log(`ERROR random video click failed - attempt: ${attempt}, error: ${err && err.message ? err.message : err}`);
+		}
+		return null;
 	});
 }
 
 // Poll script for the playback monitor. Uses the standard HTML5 media API for progress/end. There is no
 // media-API signal for "scheduled live, not started yet", so upcoming-live is detected two ways: the
 // player's getPlayerResponse() (videoDetails.isUpcoming or playability status LIVE_STREAM_OFFLINE), and a
-// rendered '#movie_player .ytp-offline-slate' (the waiting screen with the countdown and notify button).
+// rendered '#movie_player .ytp-offline-slate' (the countdown screen or collapsed offline message).
 // The slate is only counted when it has a layout box, since a hidden slate may stay in the DOM.
 // First-video end: a capture-phase 'ended' listener on the main player's <video> sets a sticky flag (media
 // events do not bubble, so capture is required, and the flag survives the brief autoplay transition). The
@@ -227,8 +235,8 @@ const playbackPollScript = "(function(){if(!window.__ytEndHook){window.__ytEndHo
 
 // Single 1s poller that runs from watch-page arrival until the next RandomPlay. Responsibilities:
 // 1. First video reaches its natural end -> random front-5% video (once per cycle).
-// 2. Current video is an upcoming live stream on any playlist watch page -> random other video (once per
-//    video id, all excluded).
+// 2. Current video is an upcoming/offline live stream on any playlist watch page -> random other video.
+//    Exclude every detected id, but mark it handled only after a click succeeds; retry failed picks.
 // 3. No playback progress on this cycle's playlist for PLAYBACK_STALL_MS -> next channel early. When a
 //    quit is armed, it neither quits nor switches: it holds until the 1-hour timer quits as scheduled.
 // 4. Deferred hour-end switch (waitForVideoEnd) -> endChannel once the pending video changes or ends.
@@ -238,6 +246,8 @@ function startPlaybackMonitor() {
 	const webViewTranslation = document.getElementById("webViewTranslation");
 	let firstVideoHandled = false;
 	const upcomingVideoIds = new Set();
+	const skippedUpcomingVideoIds = new Set();
+	let upcomingSkipAttempts = 0;
 	let lastProgressAt = Date.now();
 	let lastVideoId = null;
 	let lastTime = null;
@@ -249,7 +259,7 @@ function startPlaybackMonitor() {
 			return;
 		}
 		busy = true;
-		webViewTranslation.executeJavaScript(playbackPollScript).then((state) => {
+		webViewTranslation.executeJavaScript(playbackPollScript).then(async (state) => {
 			if (monitorIntervalID !== intervalId || !state) {
 				return;
 			}
@@ -269,6 +279,9 @@ function startPlaybackMonitor() {
 				lastProgressAt = now;
 				stallHoldLogged = false;
 			}
+			if (videoId !== lastVideoId) {
+				upcomingSkipAttempts = 0;
+			}
 			lastVideoId = videoId;
 			lastTime = state.time;
 
@@ -279,24 +292,37 @@ function startPlaybackMonitor() {
 				return;
 			}
 
-			// Upcoming skip applies to any playlist watch page, including one opened from the address bar,
-			// since it only picks another video within the same playlist. Each upcoming id is handled once per
-			// cycle and excluded from every later pick, so two upcoming videos cannot bounce between each other.
-			// If a pick fails on this cycle's playlist, the stall check switches the channel.
-			const upcoming = (state.upcoming && state.respVideoId === videoId) || state.slate;
-			if (playlistId && upcoming && !upcomingVideoIds.has(videoId)) {
-				upcomingVideoIds.add(videoId);
-				lastProgressAt = now;
-				log(`upcoming live detected - videoId: ${videoId}, listId: ${playlistId}, onCycleWatch: ${onCycleWatch}, respUpcoming: ${state.upcoming}, respVideoId: ${state.respVideoId}, slate: ${state.slate}, status: ${state.status}, selecting another random video`);
-				clickRandomFrontVideo(20, Array.from(upcomingVideoIds));
-				return;
+			// The slate and player response can both belong to the previous video during SPA navigation.
+			// Use the visible slate alone only when the response has no video id to compare.
+			const responseMatches = state.respVideoId === videoId;
+			const upcoming = (state.upcoming && responseMatches) || (state.slate && (!state.respVideoId || responseMatches));
+			// This also applies to manually opened playlists. Keep exclusions separate from successful skips:
+			// the offline screen may appear before the sidebar. Failed picks retry without resetting the stall
+			// timer, so an empty/unavailable playlist still reaches the existing stall/quit handling.
+			if (playlistId && upcoming && !skippedUpcomingVideoIds.has(videoId)) {
+				if (!upcomingVideoIds.has(videoId)) {
+					upcomingVideoIds.add(videoId);
+					lastProgressAt = now;
+					log(`upcoming live detected - videoId: ${videoId}, listId: ${playlistId}, onCycleWatch: ${onCycleWatch}, respUpcoming: ${state.upcoming}, respVideoId: ${state.respVideoId}, slate: ${state.slate}, status: ${state.status}, selecting another random video`);
+				}
+				const result = await clickRandomFrontVideo(20, Array.from(upcomingVideoIds), ++upcomingSkipAttempts);
+				if (monitorIntervalID !== intervalId) {
+					return;
+				}
+				if (result && result.href) {
+					skippedUpcomingVideoIds.add(videoId);
+					return;
+				}
+				if (webViewTranslation.getURL() !== url.href) {
+					return;
+				}
 			}
 
 			if (!onCycleWatch) {
 				return;
 			}
 
-			if (!firstVideoHandled && (state.endedFlag || (state.ended && !state.ad))) {
+			if (!upcoming && !firstVideoHandled && (state.endedFlag || (state.ended && !state.ad))) {
 				firstVideoHandled = true;
 				log('first video ended - selecting random front-5% video');
 				clickRandomFrontVideo(20, Array.from(upcomingVideoIds));
