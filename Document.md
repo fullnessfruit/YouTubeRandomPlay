@@ -104,14 +104,13 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 - 시작 시 PIP 모드 (86x234 DIP, alwaysOnTop, 프레임리스)
 - `isPip` 플래그로 모드 관리 (`win.isAlwaysOnTop()` 대신 사용. OS가 alwaysOnTop을 풀어도 PIP 의도 유지)
 - `win.setAlwaysOnTop(true, 'screen-saver')` - level은 macOS에서만 의미가 있음. **Windows에서는 모든 level이 동일한 HWND_TOPMOST 대역**이라 다른 topmost 창(시작 표시줄 포함)보다 위라는 보장이 없고, 그 창이 활성화되면 그 아래로 밀려남
-- **topmost 재확보 타이머**: 위 z-order 손실은 `always-on-top-changed`를 발화시키지 않으므로(플래그는 true 유지), PIP 중에는 `topmostReassertIntervalMs`(1초)마다 `win.moveTop()`으로 topmost 대역 최상단에 다시 올림. 창이 포커스 중이면 이미 최상단이고 드래그/리사이즈와 경합하지 않도록 스킵, 최소화 중에도 스킵. 창 `closed` 시 정리. 시작 메뉴/검색 플라이아웃 같은 셸 전용 상위 대역은 일반 앱이 넘을 수 없음
+- **최상위 창 사이의 순서**: OS가 정한 순서에 맡기며 `moveTop()`을 주기적으로 호출하지 않음. 겹친 여러 실행 창이 서로를 번갈아 덮는 깜빡임을 방지하기 위한 결정. 다른 최상위 창에 가려져도 자동으로 맨 앞으로 올리지 않음
 - `always-on-top-changed` 이벤트: PIP 모드에서 alwaysOnTop 플래그 자체가 풀리면 자동 복구
 - **PIP 토글은 창 크기를 변경하지 않음**: `alwaysOnTop`과 렌더러 UI만 전환하여 사용자가 리사이즈한 크기를 모드 전환 후에도 유지. 윈도우 생성 시 86x234로 시작하지만 이후 크기는 사용자 조정에 맡김
 
 `createWindow()`
 - PIP 모드로 윈도우 생성 (86x234, frame: false, alwaysOnTop: true)
 - `did-finish-load`에서 렌더러에 `pip-changed` IPC 전송
-- topmost 재확보 타이머 시작
 - `always-on-top-changed`, `resize` 이벤트에 디버그 로그 연결
 
 `ipcMain.on('toggle-pip')` - PIP ↔ 일반 모드 전환. `isPip` 플래그와 `alwaysOnTop`만 토글하고 `pip-changed` 전송. 창 크기(bounds)는 건드리지 않음
@@ -288,7 +287,6 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 | 재생 버튼 클릭 | 1초 인터벌 | YouTube 재생 버튼 반복 탐색/클릭 |
 | 재생 모니터 | 1초 인터벌 폴링 | watch 도달 ~ 다음 RandomPlay. 최초 영상 종료/라이브 예고 → 앞 5% 랜덤 클릭, 정지 판정, 미뤄둔 전환 |
 | 재생 정지 판정 | 60초 | 영상 id/currentTime 무변화 시 채널 조기 전환 |
-| topmost 재확보 | 1초 인터벌 (main.js) | PIP 중 비포커스 시 `win.moveTop()` |
 | 재생목록 로테이션 | 1시간 (3,600,000ms) | 새 랜덤 재생목록으로 전환 (`waitForVideoEnd` 엔트리는 재생 중 영상 종료 후) |
 
 ---
