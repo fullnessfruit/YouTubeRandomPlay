@@ -270,7 +270,8 @@ const playbackPollScript = `(function() {
 // Single 1s poller that runs from watch-page arrival until the next RandomPlay. Responsibilities:
 // 1. First video reaches its natural end -> random front-5% video (once per cycle).
 // 2. Current video is an upcoming/offline live stream on any playlist watch page -> random other video.
-//    Exclude every detected id, but mark it handled only after a click succeeds; retry failed picks.
+//    Exclude every detected id for the cycle. Suppress duplicate successful picks only for this visit,
+//    since playlist autoplay can return to a waiting video that was already skipped.
 // 3. No playback progress on this cycle's playlist for PLAYBACK_STALL_MS -> next channel early. When a
 //    quit is armed, it neither quits nor switches: it holds until the 1-hour timer quits as scheduled.
 // 4. Deferred hour-end switch (waitForVideoEnd) -> endChannel once the pending video changes or ends.
@@ -280,10 +281,11 @@ function startPlaybackMonitor() {
 	const webViewTranslation = document.getElementById("webViewTranslation");
 	let firstVideoHandled = false;
 	const upcomingVideoIds = new Set();
-	const skippedUpcomingVideoIds = new Set();
+	let upcomingSkipHandled = false;
 	let upcomingSkipAttempts = 0;
 	let lastProgressAt = Date.now();
 	let lastVideoId = null;
+	let lastPlaylistId = null;
 	let lastTime = null;
 	let stallHoldLogged = false;
 	let busy = false;
@@ -309,14 +311,17 @@ function startPlaybackMonitor() {
 			const onCycleWatch = !!(playlistId && currentListId && playlistId === currentListId);
 			lastPoll = { onCycleWatch: onCycleWatch, videoId: videoId, ended: state.ended };
 
-			if (!onCycleWatch || state.ad || videoId !== lastVideoId || state.time !== lastTime) {
+			const watchChanged = videoId !== lastVideoId || playlistId !== lastPlaylistId;
+			if (!onCycleWatch || state.ad || watchChanged || state.time !== lastTime) {
 				lastProgressAt = now;
 				stallHoldLogged = false;
 			}
-			if (videoId !== lastVideoId) {
+			if (watchChanged) {
+				upcomingSkipHandled = false;
 				upcomingSkipAttempts = 0;
 			}
 			lastVideoId = videoId;
+			lastPlaylistId = playlistId;
 			lastTime = state.time;
 
 			if (pendingSwitchVideoId !== null && (!onCycleWatch || videoId !== pendingSwitchVideoId || state.ended)) {
@@ -334,18 +339,19 @@ function startPlaybackMonitor() {
 			// This also applies to manually opened playlists. Keep exclusions separate from successful skips:
 			// the offline screen may appear before the sidebar. Failed picks retry without resetting the stall
 			// timer, so an empty/unavailable playlist still reaches the existing stall/quit handling.
-			if (playlistId && upcoming && !skippedUpcomingVideoIds.has(videoId)) {
-				if (!upcomingVideoIds.has(videoId)) {
+			if (playlistId && upcoming && !upcomingSkipHandled) {
+				if (upcomingSkipAttempts === 0) {
+					const revisit = upcomingVideoIds.has(videoId);
 					upcomingVideoIds.add(videoId);
 					lastProgressAt = now;
-					log(`upcoming live detected - videoId: ${videoId}, listId: ${playlistId}, onCycleWatch: ${onCycleWatch}, respUpcoming: ${state.upcoming}, respVideoId: ${state.respVideoId}, slate: ${state.slate}, slateVideoId: ${state.slateVideoId}, status: ${state.status}, selecting another random video`);
+					log(`upcoming live detected - videoId: ${videoId}, listId: ${playlistId}, onCycleWatch: ${onCycleWatch}, respUpcoming: ${state.upcoming}, respVideoId: ${state.respVideoId}, slate: ${state.slate}, slateVideoId: ${state.slateVideoId}, status: ${state.status}, revisit: ${revisit}, selecting another random video`);
 				}
 				const result = await clickRandomFrontVideo(20, Array.from(upcomingVideoIds), ++upcomingSkipAttempts);
 				if (monitorIntervalID !== intervalId) {
 					return;
 				}
 				if (result && result.href) {
-					skippedUpcomingVideoIds.add(videoId);
+					upcomingSkipHandled = true;
 					return;
 				}
 				if (webViewTranslation.getURL() !== url.href) {

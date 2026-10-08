@@ -96,6 +96,18 @@ function createPlayback() {
 	vm.runInContext(`currentListId = '${playlistId}'; currentEntry = { waitForVideoEnd: false }; startPlaybackMonitor();`, host);
 	playback.call = (name) => vm.runInContext(`${name}()`, host);
 	playback.endFirstVideo = () => { guest.window.__ytEnded = true; };
+	playback.visitVideo = (videoId, upcoming, listId = playlistId) => {
+		playback.url = watchUrl(videoId, listId);
+		playback.response = {
+			videoDetails: { videoId, isUpcoming: upcoming },
+			playabilityStatus: { status: upcoming ? 'LIVE_STREAM_OFFLINE' : 'OK' }
+		};
+		playback.slateVisible = upcoming;
+		playback.slateBackgroundImage = upcoming ? `url("https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg")` : '';
+		playback.media.currentTime = 0;
+		playback.media.ended = false;
+		playback.media.paused = upcoming;
+	};
 	playback.poll = async (elapsed = 1000) => {
 		now += elapsed;
 		for (const callback of Array.from(intervals.values())) callback();
@@ -150,6 +162,11 @@ const tests = [
 		playback.response.videoDetails.videoId = 'secondOffline';
 		await playback.poll();
 		assert.deepStrictEqual(playback.clicks, ['secondOffline', 'playable']);
+		playback.visitVideo('playable', false);
+		await playback.poll();
+		playback.visitVideo(offlineId, true);
+		await playback.poll();
+		assert.deepStrictEqual(playback.clicks, ['secondOffline', 'playable', 'playable']);
 	}],
 	['retry a rejected click execution', async () => {
 		const playback = createPlayback();
@@ -225,6 +242,36 @@ const tests = [
 		playback.sidebar = [offlineId, 'playable'];
 		await playback.poll();
 		assert.deepStrictEqual(playback.clicks, []);
+	}],
+	['skip a scheduled live stream again after autoplay returns to it with a quit armed', async () => {
+		const playback = createPlayback();
+		playback.sidebar = ['shortVideo', offlineId, 'playable'];
+		await playback.poll();
+		assert.deepStrictEqual(playback.clicks, ['shortVideo']);
+		playback.visitVideo('shortVideo', false);
+		await playback.poll();
+		playback.media.currentTime = 21;
+		await playback.poll(21000);
+		playback.call('OnExitAfterBtnClick');
+		playback.visitVideo(offlineId, true);
+		await playback.poll();
+		assert.deepStrictEqual(playback.clicks, ['shortVideo', 'shortVideo']);
+		await playback.poll();
+		assert.strictEqual(playback.clickRequests, 2, 'Wait for navigation after the repeat skip');
+		const detections = playback.logs.filter((line) => line.includes('upcoming live detected'));
+		assert.strictEqual(detections.length, 2);
+		assert(detections[1].includes('revisit: true'));
+		assert.deepStrictEqual(playback.loads, []);
+		assert.deepStrictEqual(playback.ipc, []);
+	}],
+	['skip the same waiting video again when it is opened in another playlist', async () => {
+		const playback = createPlayback();
+		playback.sidebar = [offlineId, 'playable'];
+		await playback.poll();
+		playback.visitVideo(offlineId, true, 'anotherPlaylist');
+		await playback.poll();
+		assert.deepStrictEqual(playback.clicks, ['playable', 'playable']);
+		assert.deepStrictEqual(playback.loads, []);
 	}]
 ];
 

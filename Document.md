@@ -199,7 +199,7 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 `playbackPollScript` (게스트에 주입하는 폴링 스크립트)
 - 반환: `endedFlag`, `ended`, `ad`, `time`(currentTime), `paused`, `respVideoId`, `upcoming`, `status`, `slate`, `slateVideoId`
 - **종료 감지는 표준 HTML5 미디어 API** (YouTube 내부 `getPlayerState`보다 안정적). capture 단계 `ended` 리스너를 1회 주입해 sticky 플래그(`window.__ytEnded`) 설정. media 이벤트는 버블링되지 않아 document capture 필수이며, 자동재생으로 종료 상태가 짧게 스쳐도 플래그로 포착. `#movie_player video`의 `.ended`를 폴백으로 사용. `#movie_player` 내부 video로 한정해 hover 미리보기/미니플레이어 오탐 방지, `.ad-showing` 시 광고 종료 제외. 이 sticky 플래그는 페이지 컨텍스트 수명 동안 유지되므로 "최초 영상 종료" 판정에만 사용
-- **라이브 대기/오프라인 판정 (미디어 API로는 "예약됨, 미시작"을 알 수 없음)**: (a) `#movie_player.getPlayerResponse()`의 `videoDetails.isUpcoming` 또는 `playabilityStatus.status === 'LIVE_STREAM_OFFLINE'` (b) `#movie_player .ytp-offline-slate`가 레이아웃 박스를 가짐(`getClientRects().length`). 카운트다운 화면과 `ライブ ストリームはオフラインです`라는 축소 슬레이트 모두 같은 클래스 경로로 감지하며 문구에 의존하지 않음. 슬레이트는 숨겨진 채 DOM에 남을 수 있어 표시 여부로 판정
+- **라이브 대기/오프라인 판정 (미디어 API로는 "예약됨, 미시작"을 알 수 없음)**: (a) `#movie_player.getPlayerResponse()`의 `videoDetails.isUpcoming` 또는 `playabilityStatus.status === 'LIVE_STREAM_OFFLINE'` (b) `#movie_player .ytp-offline-slate`가 레이아웃 박스를 가짐(`getClientRects().length`). `2 日後にライブ配信` 같은 예약 안내와 `ライブ ストリームはオフラインです`라는 축소 슬레이트 모두 같은 클래스 경로로 감지하며 문구에 의존하지 않음. 슬레이트는 숨겨진 채 DOM에 남을 수 있어 표시 여부로 판정
 - **SPA 전환 시 신호별 영상 식별**: 응답과 슬레이트는 서로 다른 시점에 갱신됨. 응답은 `respVideoId`가 URL의 `v`와 같을 때만 채택. 슬레이트는 내부 `.ytp-offline-slate-background`의 `style.backgroundImage`에서 `/vi/<videoId>/` 경로를 읽어 `slateVideoId`를 반환하고, 이 id가 현재 URL과 같을 때 채택. 따라서 이전 영상의 응답이 남아도 현재 영상의 오프라인 화면을 감지하고, 새 영상의 응답이 도착해도 이전 영상의 슬레이트를 새 영상으로 오인하지 않음. 배경에서 id를 얻지 못하면 응답 id가 현재 URL과 같거나 응답 id 자체가 없는 경우에만 표시 중인 슬레이트를 채택
 
 `startPlaybackMonitor()`
@@ -208,7 +208,7 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 - **판정 범위의 비자명한 결정**: 라이브 예고 건너뛰기는 같은 재생목록 안에서 다른 영상을 고를 뿐이므로 `playlistId`만 있으면(주소창으로 직접 연 재생목록 포함) 동작. 반면 최초 영상 종료 점프, 정지 시 채널 전환, 미뤄둔 전환은 `onCycleWatch`일 때만 동작해 수동 시청 중 채널이 바뀌지 않게 함 (`onCycleWatch`가 아니면 진행 타이머도 계속 리셋)
 - 처리 순서:
   1. **미뤄둔 전환**: `pendingSwitchVideoId`가 있고 영상 id가 바뀌었거나 `ended`이거나 `onCycleWatch`가 아니면 `endChannel('deferred video ended')`
-  2. **라이브 대기/오프라인** (`playlistId` 필요, `onCycleWatch` 불필요): 감지한 id는 `upcomingVideoIds`에 즉시 추가해 모든 후속 선택 후보에서 제외하고, 다른 영상 클릭에 성공한 id만 별도 `skippedUpcomingVideoIds`에 추가. `clickRandomFrontVideo(20, 감지한 id 전체, 시도 횟수)`가 빈 목록·제외된 후보만 있는 목록·실행 오류로 클릭하지 못하면 다음 폴링에서 재시도. 대기 화면이 사이드바보다 먼저 나타나도 감지 사실만으로 처리가 완료되지 않도록 두 Set을 분리함. 감지 로그와 진행 타이머 초기화는 해당 id 최초 감지 시에만 수행하며, 재시도는 정지 타이머를 연장하지 않으므로 계속 실패하면 아래 정지/종료 예약 분기로 진행. 클릭 성공 후에는 내비게이션을 기다리는 동안 같은 id를 반복 클릭하지 않음. 여러 대기 영상은 모두 제외해 서로를 고르며 왕복하지 않도록 함. `list`가 없는 단일 영상은 고를 대상이 없어 제외
+  2. **라이브 대기/오프라인** (`playlistId` 필요, `onCycleWatch` 불필요): 감지한 id는 `upcomingVideoIds`에 추가해 사이클 내 모든 후속 선택 후보에서 제외. 클릭 성공 여부는 현재 방문의 `upcomingSkipHandled`로 관리하며, 폴링에서 영상 id 또는 재생목록 id 변경을 확인하면 이 플래그와 시도 횟수를 초기화. 재생목록 자동재생이 이미 건너뛴 대기 영상으로 돌아와도 다시 건너뛰고, 클릭 직후 내비게이션을 기다리는 동안에는 중복 클릭을 막기 위한 분리. 제외 목록은 방문이 바뀌어도 유지해 여러 대기 영상을 서로 다시 선택하지 않도록 함. `clickRandomFrontVideo(20, 감지한 id 전체, 시도 횟수)`가 빈 목록·제외된 후보만 있는 목록·실행 오류로 클릭하지 못하면 다음 폴링에서 재시도. 감지 로그와 진행 타이머 초기화는 방문별 첫 시도에만 수행하며, 재방문은 `revisit: true`를 함께 기록. 재시도는 정지 타이머를 연장하지 않으므로 계속 실패하면 아래 정지/종료 예약 분기로 진행. 종료 예약 중에도 같은 재생목록 안의 대기 영상 건너뛰기는 동작. `list`가 없는 단일 영상은 고를 대상이 없어 제외
   - 이후 3, 4는 `onCycleWatch`일 때만
   3. **최초 영상 종료**: 사이클당 1회 `clickRandomFrontVideo(20, 예고 id 전체)` (앞 5%). 라이브 대기/오프라인으로 판정된 동안에는 처리하지 않아 이전 영상의 sticky 종료 플래그가 건너뛰기 재시도와 중복 클릭을 일으키지 않도록 함
   4. **재생 정지**: 영상 id 또는 `currentTime`이 `PLAYBACK_STALL_MS`(60초) 동안 변하지 않으면(광고 재생 중은 진행으로 간주) 1시간 전이라도 `RandomPlay()`로 채널 전환. **종료 예약 중이면 즉시 종료도 채널 전환도 하지 않고** 1시간 타이머가 예정대로 종료할 때까지 대기 (`holding until scheduled quit`을 정지 구간당 1회 기록, 대기 중 예약을 해제하면 다음 폴링에서 채널 전환). 재생목록 끝에서 자동재생이 멈춘 경우, "계속 시청하시겠습니까?" 등으로 정지한 경우, 첫 영상이 시작조차 안 된 경우를 모두 포괄. 전환 대기 중(`pendingSwitchVideoId`)에 정지하면 1시간은 이미 지났으므로 `endChannel('deferred video stalled')` (예약 중이면 종료)
@@ -274,8 +274,8 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 ### tests/playback-monitor.test.js
 **역할**: Electron 실행 없이 실제 `EventHandler.js`와 게스트 주입 스크립트를 함께 검증하는 회귀 테스트. `node tests/playback-monitor.test.js`로 실행하며 추가 패키지가 필요하지 않음. 선택적으로 소스 파일 경로를 인자로 받아 수정 전 코드에서도 같은 실패가 재현되는지 확인 가능
 
-- `createPlayback()` - 호스트/게스트를 별도 Node VM 컨텍스트에서 실행하고 시간, 사이드바 준비 시점, 플레이어 응답, 클릭 실패를 제어. 가상 영상 id와 모의 DOM을 사용하며 별도 테스트 데이터 파일이 필요하지 않음. 내비게이션·클릭·IPC·로그를 수집하여 비동기 폴링 결과를 확인. 실제 Chromium 렌더링과 YouTube 네트워크 동작은 검증하지 않음
-- 테스트 실행부 - 목록 표시 지연 후 재시도, 이전 영상 응답에 의한 오탐 방지, 응답 없는 슬레이트 감지, 숨겨진 슬레이트 무시, 대기 영상 누적 제외, 실행 실패 재시도, 60초 정지 및 로그 제한, 종료 예약, 수동 재생목록, 최초 종료 플래그와의 중복 클릭 방지를 순차 검증. 응답/슬레이트의 갱신 순서가 다른 두 전환 상황도 검증. 단언 실패 시 종료 코드 1
+- `createPlayback()` - 호스트/게스트를 별도 Node VM 컨텍스트에서 실행하고 시간, 사이드바 준비 시점, 플레이어 응답, 클릭 실패를 제어. 가상 영상 id와 모의 DOM을 사용하며 별도 테스트 데이터 파일이 필요하지 않음. 반환 객체의 `visitVideo(videoId, upcoming, listId)`는 URL·플레이어 응답·슬레이트·미디어 상태를 함께 바꿔 영상/재생목록 전환과 재방문을 재현. 내비게이션·클릭·IPC·로그를 수집하여 비동기 폴링 결과를 확인. 실제 Chromium 렌더링과 YouTube 네트워크 동작은 검증하지 않음
+- 테스트 실행부 - 목록 표시 지연 후 재시도, 이전 영상 응답에 의한 오탐 방지, 응답 없는 슬레이트 감지, 숨겨진 슬레이트 무시, 대기 영상 누적 제외, 실행 실패 재시도, 60초 정지 및 로그 제한, 종료 예약, 수동 재생목록, 최초 종료 플래그와의 중복 클릭 방지를 순차 검증. 응답/슬레이트의 갱신 순서가 다른 두 전환 상황, 종료 예약 중 예약 영상 재방문 시 재처리, 다른 재생목록에서 같은 대기 영상 재처리, 재방문 후에도 누적 제외 목록 유지도 검증. 단언 실패 시 종료 코드 1
 
 ---
 
