@@ -1,6 +1,7 @@
 const { app, BrowserWindow, session, ipcMain } = require('electron')
 const path = require('path')
 const fs = require('fs')
+const { startWindowDiagnostics } = require('./WindowDiagnostics')
 
 // Disable background throttling for all renderers including webview guest processes
 app.commandLine.appendSwitch('disable-renderer-backgrounding')
@@ -8,7 +9,7 @@ app.commandLine.appendSwitch('disable-background-timer-throttling')
 
 const logFile = path.join(__dirname, 'debug.log')
 function log(msg) {
-  const line = `[${new Date().toISOString()}] ${msg}\n`
+  const line = `[${new Date().toISOString()}] [main pid:${process.pid}] ${String(msg).replace(/[\r\n]+/g, ' ')}\n`
   fs.appendFileSync(logFile, line)
 }
 
@@ -92,6 +93,7 @@ function createWindow () {
   // Let the OS order topmost windows; periodic raises make overlapping instances alternate in front.
   win.setAlwaysOnTop(true, 'screen-saver');
   log(`createWindow - alwaysOnTop: ${win.isAlwaysOnTop()}, level: screen-saver`);
+  startWindowDiagnostics(win, () => isPip, log);
 
   win.setMenu(null);
   win.loadFile('index.html')

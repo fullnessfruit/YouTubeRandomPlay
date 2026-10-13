@@ -55,6 +55,7 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 
 ### 메인 프로세스
 - `main.js` - Electron 윈도우 생성, 캐시 관리
+- `WindowDiagnostics.js`, `WindowDiagnostics.ps1` - 창 가림 원인 분석용 Electron/Win32 상태 수집
 
 ### 렌더러 프로세스
 - `index.html` - UI (주소창 + webview)
@@ -105,19 +106,47 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 - `isPip` 플래그로 모드 관리 (`win.isAlwaysOnTop()` 대신 사용. OS가 alwaysOnTop을 풀어도 PIP 의도 유지)
 - `win.setAlwaysOnTop(true, 'screen-saver')` - level은 macOS에서만 의미가 있음. **Windows에서는 모든 level이 동일한 HWND_TOPMOST 대역**이라 다른 topmost 창(시작 표시줄 포함)보다 위라는 보장이 없고, 그 창이 활성화되면 그 아래로 밀려남
 - **최상위 창 사이의 순서**: OS가 정한 순서에 맡기며 `moveTop()`을 주기적으로 호출하지 않음. 겹친 여러 실행 창이 서로를 번갈아 덮는 깜빡임을 방지하기 위한 결정. 다른 최상위 창에 가려져도 자동으로 맨 앞으로 올리지 않음
-- `always-on-top-changed` 이벤트: PIP 모드에서 alwaysOnTop 플래그 자체가 풀리면 자동 복구
+- `always-on-top-changed` 이벤트: PIP 모드에서 해제 이벤트를 받으면 자동 복구. 이 이벤트가 없다는 사실만으로 Windows의 실제 최상위 상태가 유지됐다고 판단하지 않으며, `WindowDiagnostics`가 별도로 상태를 조회
 - **PIP 토글은 창 크기를 변경하지 않음**: `alwaysOnTop`과 렌더러 UI만 전환하여 사용자가 리사이즈한 크기를 모드 전환 후에도 유지. 윈도우 생성 시 86x234로 시작하지만 이후 크기는 사용자 조정에 맡김
 
 `createWindow()`
 - PIP 모드로 윈도우 생성 (86x234, frame: false, alwaysOnTop: true)
 - `did-finish-load`에서 렌더러에 `pip-changed` IPC 전송
 - `always-on-top-changed`, `resize` 이벤트에 디버그 로그 연결
+- `startWindowDiagnostics()`를 연결해 PIP 의도, Electron 상태, Windows 실제 상태를 비교할 진단 로그 수집
 
 `ipcMain.on('toggle-pip')` - PIP ↔ 일반 모드 전환. `isPip` 플래그와 `alwaysOnTop`만 토글하고 `pip-changed` 전송. 창 크기(bounds)는 건드리지 않음
 
-`log(msg)` - `debug.log` 파일에 타임스탬프 포함 로그 추가 (appendFileSync)
+`log(msg)` - `debug.log` 파일에 타임스탬프와 `[main pid:프로세스ID]`를 붙여 기록 (appendFileSync). 여러 실행 인스턴스의 메인 프로세스 로그를 구분하며, 메시지 내부 개행은 공백으로 바꿔 한 사건을 한 줄에 유지
 
 **IPC 핸들러**: `toggle-pip`, `window-minimize`, `window-maximize`, `window-close`
+
+---
+
+### WindowDiagnostics.js
+**역할**: 일반 창에 PIP 창이 가려지는 시점의 상태를 수집. 창의 포커스·위치·최상위 상태를 변경하는 API는 호출하지 않음
+
+`startWindowDiagnostics(window, getIsPip, log)`
+- `getIsPip` 콜백으로 앱의 모드 의도를 읽으며, `focus`/`blur`, 표시/숨김, 최소화/복원, 최대화/복원, 이동/리사이즈 완료, 전체화면, 최상위 변경 이벤트에 `window diagnostic` 기록. `always-on-top-changed`의 이벤트 인자도 reason에 남겨 이후 복구된 상태와 구분
+- Windows에서는 숨겨진 PowerShell 보조 프로세스를 창당 하나만 유지. 고정된 `WindowDiagnostics.ps1` 내용을 UTF-16LE `EncodedCommand`로 전달해 인용 부호 손상을 피하고, stdin으로 32/64비트 HWND를 10진 문자열로 전달. 보조 프로세스는 JSON 한 줄로 응답하며 추가 네이티브 패키지가 필요하지 않음
+- 1초마다 비동기 조회하며 응답을 기다리는 동안 다음 요청은 생략. Electron이 이미 비활성 상태여도 다른 창이 위로 올라오는 변화를 포착하기 위한 폴링. 동일 상태는 60초마다 생존 확인용으로만 기록하며, 상태 변경과 Electron 이벤트는 즉시 기록
+- `record()` - `electron`에 isPip/alwaysOnTop/포커스/표시/최소화/최대화/전체화면/bounds, `native`에 Win32 조회 결과를 같은 줄로 기록. `nativeSampledAt`과 `queryMs`로 비동기 조회 시차를 드러냄. Electron 이벤트만 기록한 줄은 `native: null`이며 이전 네이티브 결과를 현재 값처럼 재사용하지 않음
+- `sample()` - 요청 직전에 HWND 전송과 15초 제한 시간을 설정. `failNative()`는 실행·통신·응답 오류 또는 시간 초과를 `WARN window diagnostic native unavailable` 한 줄로 남기고 보조 프로세스만 정지. 이때 nativeStatus는 unavailable이고 Electron 상태 로그는 계속 기록하며 반복 재실행하지 않음. Windows 외에는 unsupported로 기록
+- `stopNative()` - 응답 대기/스트림/보조 프로세스 정리. 창 `closed` 시 전체 폴링과 이벤트 리스너도 정리하며 `window diagnostic stopped` 기록
+
+**로그 해석**
+- `electron.alwaysOnTop`과 `native.own.topmost`를 비교하면 Electron이 보고하는 상태와 실제 `WS_EX_TOPMOST`의 불일치를 확인할 수 있음. `nativeStatus: available`인 응답의 `native.own`을 사용하며, `topmost: null`은 조회 실패로 false와 구분
+- `native.foreground`는 현재 활성 창. `overlapCandidatesAbove`는 우리 창보다 위에 있으면서 사각형 영역이 겹치는 창의 HWND/PID/프로그램명/클래스/최상위 상태/표시 상태/최소화 상태/cloaked/bounds. 메인 로그 PID와 후보 PID를 비교해 다른 실행 인스턴스와 외부 앱을 구분
+- 겹침은 실제 픽셀 가림의 확정 판정이 아님. 투명 창·비직사각형 영역·보이지 않는 리사이즈 테두리를 고려하지 않으며, 1초보다 짧은 변화나 조회 중 순서 변경은 놓칠 수 있음. Electron bounds는 DIP, 네이티브 bounds는 보조 프로세스의 `GetWindowRect` 좌표이므로 두 좌표를 직접 비교하지 않음
+
+### WindowDiagnostics.ps1
+**역할**: `Add-Type`으로 Win32 조회만 수행하는 C# 브리지를 한 번 로드하고, stdin의 HWND 요청마다 상태를 반환. 창 제목이나 화면 내용은 수집하지 않음
+
+- `YtrpWindowInfo` / `YtrpWindowSnapshot` - 개별 창 상태와 우리 창·활성 창·위쪽 겹침 후보를 직렬화하는 자료형
+- `YtrpWindowProbe.Read(hwnd, identify)` - `GetWindowLongW(GWL_EXSTYLE)`의 `WS_EX_TOPMOST`를 실제 최상위 상태로 읽음. 마지막 오류를 초기화해 값 0과 API 실패를 구분하고 실패 시 topmost=null/styleError를 반환. 유효하지 않거나 사라진 HWND는 null. `IsWindowVisible`, `IsIconic`, `GetWindowRect`, `DwmGetWindowAttribute(DWMWA_CLOAKED)`도 읽음
+- `Identify()` - PID, 프로그램명, 윈도우 클래스를 조회. 권한 부족이나 프로세스 종료로 이름을 읽지 못하면 이름만 null로 남김
+- `Capture()` - 우리 창과 활성 창을 읽고 `GetWindow(GW_HWNDPREV)`로 위쪽 창을 순회. 표시 중이고 최소화·cloaked 상태가 아닌 겹침 후보만 포함하며, cloaked 조회 실패(null)는 후보에서 배제하지 않음. 최대 5개 상세 정보와 전체 발견 수(overlapCount)를 반환. 탐색은 256개 핸들/중복 방문에서 중단하고 scanTruncated로 표시해 창의 동시 종료·재배치로 무한 순회하지 않도록 함
+- 요청 루프 - 한 요청의 결과 또는 오류를 UTF-8 JSON 한 줄로 반환. 호스트 종료로 stdin이 닫히면 루프도 종료
 
 ---
 
@@ -277,6 +306,12 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 - `createPlayback()` - 호스트/게스트를 별도 Node VM 컨텍스트에서 실행하고 시간, 사이드바 준비 시점, 플레이어 응답, 클릭 실패를 제어. 가상 영상 id와 모의 DOM을 사용하며 별도 테스트 데이터 파일이 필요하지 않음. 반환 객체의 `visitVideo(videoId, upcoming, listId)`는 URL·플레이어 응답·슬레이트·미디어 상태를 함께 바꿔 영상/재생목록 전환과 재방문을 재현. 내비게이션·클릭·IPC·로그를 수집하여 비동기 폴링 결과를 확인. 실제 Chromium 렌더링과 YouTube 네트워크 동작은 검증하지 않음
 - 테스트 실행부 - 목록 표시 지연 후 재시도, 이전 영상 응답에 의한 오탐 방지, 응답 없는 슬레이트 감지, 숨겨진 슬레이트 무시, 대기 영상 누적 제외, 실행 실패 재시도, 60초 정지 및 로그 제한, 종료 예약, 수동 재생목록, 최초 종료 플래그와의 중복 클릭 방지를 순차 검증. 응답/슬레이트의 갱신 순서가 다른 두 전환 상황, 종료 예약 중 예약 영상 재방문 시 재처리, 다른 재생목록에서 같은 대기 영상 재처리, 재방문 후에도 누적 제외 목록 유지도 검증. 단언 실패 시 종료 코드 1
 
+### tests/window-diagnostics.test.js
+**역할**: `node tests/window-diagnostics.test.js`로 진단 보조 프로세스의 지연·실패가 앱의 창 동작에 영향을 주지 않는지 검증. 별도 테스트 데이터 파일은 사용하지 않음
+
+- `createHarness()` - 실제 `WindowDiagnostics.js`를 VM에서 실행하고 창/시간/프로세스를 제어하되 Node 스트림과 readline은 실제 구현을 사용. 창 상태 변경 API 호출은 테스트 실패로 처리
+- 테스트 실행부 - Electron 이벤트 없는 네이티브 상태 변화, 동일 상태 로그 제한/60초 생존 확인, 느린 보조 프로세스의 요청 누적 방지, 분할 UTF-8 응답, 오류 한 줄 기록, 프로세스 시작 실패, 창 종료 정리, Windows 외 실행을 검증. Windows API와 PowerShell 실행 자체는 모의 응답으로 대체하므로 실제 Windows 조회는 앱 실행 시 로그로 확인해야 함
+
 ---
 
 ## 주요 타이밍
@@ -287,6 +322,7 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 | 재생 버튼 클릭 | 1초 인터벌 | YouTube 재생 버튼 반복 탐색/클릭 |
 | 재생 모니터 | 1초 인터벌 폴링 | watch 도달 ~ 다음 RandomPlay. 최초 영상 종료/라이브 예고 → 앞 5% 랜덤 클릭, 정지 판정, 미뤄둔 전환 |
 | 재생 정지 판정 | 60초 | 영상 id/currentTime 무변화 시 채널 조기 전환 |
+| 창 상태 진단 | 1초 조회 / 동일 상태 60초 기록 | Electron/Win32 최상위 상태와 위쪽 겹침 후보 수집. 창 순서는 변경하지 않음 |
 | 재생목록 로테이션 | 1시간 (3,600,000ms) | 새 랜덤 재생목록으로 전환 (`waitForVideoEnd` 엔트리는 재생 중 영상 종료 후) |
 
 ---
