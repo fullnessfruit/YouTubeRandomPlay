@@ -7,8 +7,8 @@ const SAMPLE_INTERVAL_MS = 1000;
 const HEARTBEAT_MS = 60000;
 const QUERY_TIMEOUT_MS = 15000;
 
-// Observe window state without changing focus, visibility, or z-order.
-function startWindowDiagnostics(window, getIsPip, log) {
+// Collect window state and deliver native samples to an optional main-process recovery policy.
+function startWindowDiagnostics(window, getIsPip, log, onNativeState = null) {
   const windowId = window.id;
   let stopped = false;
   let helper = null;
@@ -106,6 +106,14 @@ function startWindowDiagnostics(window, getIsPip, log) {
           clearTimeout(queryTimeout);
           nativeStatus = 'available';
           record(request.reason, response.state, response.sampledAt, request.requestedAt);
+          // Logging may be deduplicated, but the caller still needs every current sample.
+          if (onNativeState) {
+            try {
+              onNativeState(response.state);
+            } catch (error) {
+              log(`ERROR window diagnostic native handler failed - windowId: ${windowId}, error: ${String(error).replace(/[\r\n]+/g, ' ')}`);
+            }
+          }
         } catch (error) {
           failNative(error.message);
         }

@@ -105,15 +105,22 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 - 시작 시 PIP 모드 (86x234 DIP, alwaysOnTop, 프레임리스)
 - `isPip` 플래그로 모드 관리 (`win.isAlwaysOnTop()` 대신 사용. OS가 alwaysOnTop을 풀어도 PIP 의도 유지)
 - `win.setAlwaysOnTop(true, 'screen-saver')` - level은 macOS에서만 의미가 있음. **Windows에서는 모든 level이 동일한 HWND_TOPMOST 대역**이라 다른 topmost 창(시작 표시줄 포함)보다 위라는 보장이 없고, 그 창이 활성화되면 그 아래로 밀려남
-- **최상위 창 사이의 순서**: OS가 정한 순서에 맡기며 `moveTop()`을 주기적으로 호출하지 않음. 겹친 여러 실행 창이 서로를 번갈아 덮는 깜빡임을 방지하기 위한 결정. 다른 최상위 창에 가려져도 자동으로 맨 앞으로 올리지 않음
-- `always-on-top-changed` 이벤트: PIP 모드에서 해제 이벤트를 받으면 자동 복구. 이 이벤트가 없다는 사실만으로 Windows의 실제 최상위 상태가 유지됐다고 판단하지 않으며, `WindowDiagnostics`가 별도로 상태를 조회
+- **최상위 유지**: `WindowDiagnostics`의 기존 1초 조회와 창 이벤트 조회 결과를 `restorePipTopmost()`에 전달. 최상위 플래그가 유지돼도 일반 창이 위에 겹치는 경우에는 `moveTop()`으로 복구. 정상 상태에서는 호출하지 않으며, 다른 최상위 창과의 순서 경쟁을 피하려고 겹침 후보 중 최상위 창이 하나라도 있으면 순서 복구를 생략
+- `always-on-top-changed` 이벤트: PIP 모드에서 해제 이벤트를 받으면 자동 복구. 이 이벤트가 없다는 사실만으로 Windows의 실제 최상위 상태가 유지됐다고 판단하지 않으며, `WindowDiagnostics`가 별도로 상태를 조회. `restorePipTopmost()`가 의도적으로 false → true를 설정하는 동안에는 `restoringPipTopmost` 가드로 중복 복구 방지
 - **PIP 토글은 창 크기를 변경하지 않음**: `alwaysOnTop`과 렌더러 UI만 전환하여 사용자가 리사이즈한 크기를 모드 전환 후에도 유지. 윈도우 생성 시 86x234로 시작하지만 이후 크기는 사용자 조정에 맡김
 
 `createWindow()`
 - PIP 모드로 윈도우 생성 (86x234, frame: false, alwaysOnTop: true)
 - `did-finish-load`에서 렌더러에 `pip-changed` IPC 전송
 - `always-on-top-changed`, `resize` 이벤트에 디버그 로그 연결
-- `startWindowDiagnostics()`를 연결해 PIP 의도, Electron 상태, Windows 실제 상태를 비교할 진단 로그 수집
+- `startWindowDiagnostics()`를 연결해 PIP 의도, Electron 상태, Windows 실제 상태를 비교할 진단 로그 수집과 조건부 최상위 복구 실행
+
+`restorePipTopmost(native)`
+- 네이티브 조회가 성공한 때마다 호출. 현재 PIP 모드인 표시 중 비포커스 창에만 적용하며, 최소화/종료 상태는 제외. 네이티브 own.pid가 현재 메인 PID이고 표시 중·최소화 아님·cloaked=0·topmost 조회 성공인 경우만 사용
+- 실제 topmost가 false이거나 Electron의 alwaysOnTop이 false이면 `setAlwaysOnTop(false)` → `setAlwaysOnTop(true, 'screen-saver')`로 재적용. Electron이 true를 보고하면서 네이티브 플래그만 해제된 경우에도 상태 전환을 거쳐 복구하기 위한 처리. `restoringPipTopmost`는 try/finally로 정리
+- 플래그가 유지된 경우에는 겹침 후보가 1개 이상이고, 전체 후보를 확인했으며(scanTruncated=false, overlapCount가 반환 목록 길이와 같음), 모든 후보의 topmost가 false일 때만 `moveTop()`. 여러 실행 인스턴스를 포함한 최상위 창·판정 불명 후보와는 경쟁하지 않음. 상세 후보는 최대 5개이므로 그보다 많이 겹치면 보수적으로 생략
+- `lastTopmostRecoveryAt`과 `TOPMOST_RECOVERY_COOLDOWN_MS`(1000)로 이벤트 조회와 정기 조회가 연속 도착해도 복구 호출은 초당 1회로 제한. 별도 복구 타이머는 생성하지 않음
+- `pip topmost recovered`에 복구 사유/원래 네이티브 최상위 값/겹침 후보를 한 줄로 기록. 실패 시 `ERROR pip topmost recovery failed`를 남기며 다음 유효한 조회에서 다시 판단. 네이티브 조회가 unavailable이면 이 경로는 동작하지 않고 기존 최상위 변경 이벤트 처리만 유지
 
 `ipcMain.on('toggle-pip')` - PIP ↔ 일반 모드 전환. `isPip` 플래그와 `alwaysOnTop`만 토글하고 `pip-changed` 전송. 창 크기(bounds)는 건드리지 않음
 
@@ -124,13 +131,14 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 ---
 
 ### WindowDiagnostics.js
-**역할**: 일반 창에 PIP 창이 가려지는 시점의 상태를 수집. 창의 포커스·위치·최상위 상태를 변경하는 API는 호출하지 않음
+**역할**: 일반 창에 PIP 창이 가려지는 시점의 상태를 수집하고 메인 프로세스의 복구 콜백에 전달. 창 상태 변경 API는 main.js의 `restorePipTopmost()`가 담당
 
-`startWindowDiagnostics(window, getIsPip, log)`
+`startWindowDiagnostics(window, getIsPip, log, onNativeState)`
 - `getIsPip` 콜백으로 앱의 모드 의도를 읽으며, `focus`/`blur`, 표시/숨김, 최소화/복원, 최대화/복원, 이동/리사이즈 완료, 전체화면, 최상위 변경 이벤트에 `window diagnostic` 기록. `always-on-top-changed`의 이벤트 인자도 reason에 남겨 이후 복구된 상태와 구분
 - Windows에서는 숨겨진 PowerShell 보조 프로세스를 창당 하나만 유지. 고정된 `WindowDiagnostics.ps1` 내용을 UTF-16LE `EncodedCommand`로 전달해 인용 부호 손상을 피하고, stdin으로 32/64비트 HWND를 10진 문자열로 전달. 보조 프로세스는 JSON 한 줄로 응답하며 추가 네이티브 패키지가 필요하지 않음
 - 1초마다 비동기 조회하며 응답을 기다리는 동안 다음 요청은 생략. Electron이 이미 비활성 상태여도 다른 창이 위로 올라오는 변화를 포착하기 위한 폴링. 동일 상태는 60초마다 생존 확인용으로만 기록하며, 상태 변경과 Electron 이벤트는 즉시 기록
 - `record()` - `electron`에 isPip/alwaysOnTop/포커스/표시/최소화/최대화/전체화면/bounds, `native`에 Win32 조회 결과를 같은 줄로 기록. `nativeSampledAt`과 `queryMs`로 비동기 조회 시차를 드러냄. Electron 이벤트만 기록한 줄은 `native: null`이며 이전 네이티브 결과를 현재 값처럼 재사용하지 않음
+- `onNativeState`(선택) - 성공한 모든 네이티브 응답을 기록 처리 후 전달. 동일 상태여서 로그를 생략해도 전달은 계속해 복구 재판정을 허용. 콜백 예외는 `ERROR window diagnostic native handler failed`로 격리하며 정상 네이티브 조회를 unavailable로 바꾸지 않음
 - `sample()` - 요청 직전에 HWND 전송과 15초 제한 시간을 설정. `failNative()`는 실행·통신·응답 오류 또는 시간 초과를 `WARN window diagnostic native unavailable` 한 줄로 남기고 보조 프로세스만 정지. 이때 nativeStatus는 unavailable이고 Electron 상태 로그는 계속 기록하며 반복 재실행하지 않음. Windows 외에는 unsupported로 기록
 - `stopNative()` - 응답 대기/스트림/보조 프로세스 정리. 창 `closed` 시 전체 폴링과 이벤트 리스너도 정리하며 `window diagnostic stopped` 기록
 
@@ -310,7 +318,14 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 **역할**: `node tests/window-diagnostics.test.js`로 진단 보조 프로세스의 지연·실패가 앱의 창 동작에 영향을 주지 않는지 검증. 별도 테스트 데이터 파일은 사용하지 않음
 
 - `createHarness()` - 실제 `WindowDiagnostics.js`를 VM에서 실행하고 창/시간/프로세스를 제어하되 Node 스트림과 readline은 실제 구현을 사용. 창 상태 변경 API 호출은 테스트 실패로 처리
-- 테스트 실행부 - Electron 이벤트 없는 네이티브 상태 변화, 동일 상태 로그 제한/60초 생존 확인, 느린 보조 프로세스의 요청 누적 방지, 분할 UTF-8 응답, 오류 한 줄 기록, 프로세스 시작 실패, 창 종료 정리, Windows 외 실행을 검증. Windows API와 PowerShell 실행 자체는 모의 응답으로 대체하므로 실제 Windows 조회는 앱 실행 시 로그로 확인해야 함
+- 테스트 실행부 - Electron 이벤트 없는 네이티브 상태 변화, 동일 상태 로그 제한/60초 생존 확인, 느린 보조 프로세스의 요청 누적 방지, 분할 UTF-8 응답, 오류 한 줄 기록, 프로세스 시작 실패, 창 종료 정리, Windows 외 실행을 검증. 로그 생략 시에도 복구 콜백 호출, 콜백 예외와 조회 실패의 분리도 검증. Windows API와 PowerShell 실행 자체는 모의 응답으로 대체하므로 실제 Windows 조회는 앱 실행 시 로그로 확인해야 함
+
+### tests/pip-topmost.test.js
+**역할**: `node tests/pip-topmost.test.js`로 조건부 최상위 복구와 기존 PIP 이벤트 처리의 상호작용을 검증
+
+- `createHarness()` - 실제 `main.js`를 VM에서 실행하며 Electron 창/IPC/시간/파일 접근을 모의 구현. 최상위 설정 변경 시 실제 이벤트 핸들러를 호출해 false → true 재적용의 재진입 가드를 검증하고, 창 포커스 획득이나 런타임 상태 파일 수정은 테스트 실패로 처리
+- `snapshot()` - 가상 HWND/PID를 사용한 네이티브 조회 결과 생성. 실제 로그나 테스트 데이터 파일을 저장하지 않음
+- 테스트 실행부 - 일반 창 겹침 시 복구, 최상위 경쟁 창/불완전 조회 제외, 네이티브 플래그 유실 복구, 일반 모드/포커스/최소화/숨김/종료 제외, 잘못된 네이티브 상태 제외, 초당 호출 제한, 기존 해제 이벤트 복구 유지, 복구 실패 후 가드 정리를 검증. 실제 Windows에서의 화면 순서와 깜빡임은 검증하지 않음
 
 ---
 
@@ -322,7 +337,7 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 | 재생 버튼 클릭 | 1초 인터벌 | YouTube 재생 버튼 반복 탐색/클릭 |
 | 재생 모니터 | 1초 인터벌 폴링 | watch 도달 ~ 다음 RandomPlay. 최초 영상 종료/라이브 예고 → 앞 5% 랜덤 클릭, 정지 판정, 미뤄둔 전환 |
 | 재생 정지 판정 | 60초 | 영상 id/currentTime 무변화 시 채널 조기 전환 |
-| 창 상태 진단 | 1초 조회 / 동일 상태 60초 기록 | Electron/Win32 최상위 상태와 위쪽 겹침 후보 수집. 창 순서는 변경하지 않음 |
+| 창 상태 진단·조건부 복구 | 1초 조회 / 동일 상태 60초 기록 | Electron/Win32 상태와 겹침 후보 수집 후 플래그 유실 또는 일반 창 겹침 시 복구. 복구 호출 간 최소 간격 1초 |
 | 재생목록 로테이션 | 1시간 (3,600,000ms) | 새 랜덤 재생목록으로 전환 (`waitForVideoEnd` 엔트리는 재생 중 영상 종료 후) |
 
 ---

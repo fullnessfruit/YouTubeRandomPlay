@@ -73,6 +73,44 @@ if (ensureCorrectPackageJson()) {
 
 let win;
 let isPip = true;
+let restoringPipTopmost = false;
+let lastTopmostRecoveryAt = 0;
+const TOPMOST_RECOVERY_COOLDOWN_MS = 1000;
+
+function restorePipTopmost(native) {
+  if (!win || win.isDestroyed() || !isPip || restoringPipTopmost ||
+      win.isFocused() || win.isMinimized() || !win.isVisible()) return;
+  const own = native && native.own;
+  if (!own || own.pid !== process.pid || !own.visible || own.minimized ||
+      own.cloaked !== 0 || typeof own.topmost !== 'boolean') return;
+
+  const restoreFlag = !own.topmost || !win.isAlwaysOnTop();
+  const above = native.overlapCandidatesAbove || [];
+  // Yield to other topmost windows, including other app instances. Incomplete scans cannot
+  // rule out a topmost competitor, so only raise when all overlapping windows are ordinary.
+  const coveredByNormalWindows = !native.scanTruncated && above.length > 0 &&
+    native.overlapCount === above.length && above.every((other) => other.topmost === false);
+  if (!restoreFlag && !coveredByNormalWindows) return;
+  if (Date.now() - lastTopmostRecoveryAt < TOPMOST_RECOVERY_COOLDOWN_MS) return;
+  lastTopmostRecoveryAt = Date.now();
+
+  try {
+    if (restoreFlag) {
+      // Force a level transition even if Electron still reports true after a native flag loss.
+      // Suppress the existing change-event recovery during this deliberate false -> true pair.
+      restoringPipTopmost = true;
+      win.setAlwaysOnTop(false);
+      win.setAlwaysOnTop(true, 'screen-saver');
+    } else {
+      win.moveTop();
+    }
+    log(`pip topmost recovered - reason: ${restoreFlag ? 'topmost flag lost' : 'covered by normal window'}, hwnd: ${own.hwnd}, nativeTopmost: ${own.topmost}, above: ${JSON.stringify(above)}`);
+  } catch (error) {
+    log(`ERROR pip topmost recovery failed - error: ${error && error.message ? error.message : error}`);
+  } finally {
+    restoringPipTopmost = false;
+  }
+}
 
 function createWindow () {
   win = new BrowserWindow({
@@ -90,10 +128,11 @@ function createWindow () {
     }
   })
 
-  // Let the OS order topmost windows; periodic raises make overlapping instances alternate in front.
+  // Native diagnostics request recovery only after a flag loss or overlap by ordinary windows.
   win.setAlwaysOnTop(true, 'screen-saver');
   log(`createWindow - alwaysOnTop: ${win.isAlwaysOnTop()}, level: screen-saver`);
-  startWindowDiagnostics(win, () => isPip, log);
+  lastTopmostRecoveryAt = 0;
+  startWindowDiagnostics(win, () => isPip, log, restorePipTopmost);
 
   win.setMenu(null);
   win.loadFile('index.html')
@@ -125,7 +164,7 @@ function createWindow () {
   win.on('always-on-top-changed', (event, isOnTop) => {
     log(`always-on-top-changed event - isOnTop: ${isOnTop}, isPip: ${isPip}`);
     // Restore alwaysOnTop if lost while in PIP mode
-    if (isPip && !isOnTop) {
+    if (isPip && !isOnTop && !restoringPipTopmost) {
       log('alwaysOnTop lost in PIP mode, restoring');
       win.setAlwaysOnTop(true, 'screen-saver');
     }

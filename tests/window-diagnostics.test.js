@@ -9,7 +9,7 @@ const sourcePath = path.join(__dirname, '..', 'WindowDiagnostics.js');
 const source = fs.readFileSync(sourcePath, 'utf8');
 
 // Exercise the real process/stream lifecycle without Windows or changing any window state.
-function createHarness(platform = 'win32', spawnFails = false) {
+function createHarness(platform = 'win32', spawnFails = false, onNativeState = null) {
   const logs = [];
   const writes = [];
   const timers = new Map();
@@ -53,7 +53,7 @@ function createHarness(platform = 'win32', spawnFails = false) {
     clearInterval: (id) => timers.delete(id)
   });
   vm.runInContext(source, host, { filename: sourcePath });
-  host.module.exports.startWindowDiagnostics(window, () => true, (line) => logs.push(line));
+  host.module.exports.startWindowDiagnostics(window, () => true, (line) => logs.push(line), onNativeState);
   const runTimers = (repeat) => {
     for (const [id, timer] of Array.from(timers)) {
       if (timer.repeat !== repeat) continue;
@@ -76,6 +76,27 @@ const nativeState = (topmost = true) => ({
 });
 
 const tests = [
+  ['every native sample reaches recovery even when its diagnostic log is suppressed', () => {
+    const samples = [];
+    const h = createHarness('win32', false, (state) => samples.push(state));
+    h.reply(nativeState());
+    const count = h.logs.length;
+    h.tick();
+    h.reply(nativeState());
+    assert.strictEqual(h.logs.length, count);
+    assert.strictEqual(samples.length, 2);
+    h.window.emit('closed');
+  }],
+  ['a recovery callback failure does not disable native sampling', () => {
+    const h = createHarness('win32', false, () => { throw new Error('recovery failed'); });
+    h.reply(nativeState());
+    h.tick();
+    h.reply(nativeState());
+    assert.strictEqual(h.writes.length, 2);
+    assert.strictEqual(h.logs.filter((line) => line.includes('native handler failed')).length, 2);
+    assert(!h.logs.some((line) => line.includes('native unavailable')));
+    h.window.emit('closed');
+  }],
   ['native changes without Electron events are logged; identical samples are limited', () => {
     const h = createHarness();
     h.reply(nativeState());
