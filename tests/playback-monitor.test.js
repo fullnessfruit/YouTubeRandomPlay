@@ -9,7 +9,7 @@ const offlineId = 'offline0001';
 const watchUrl = (videoId, listId = playlistId) => `https://www.youtube.com/watch?v=${videoId}&list=${listId}`;
 
 // Run the real host and injected scripts with a delayed sidebar, controlled clock and no Electron.
-function createPlayback() {
+function createPlayback(waitForVideoEnd = false) {
 	let now = 0;
 	let nextTimerId = 0;
 	const intervals = new Map();
@@ -93,7 +93,7 @@ function createPlayback() {
 	});
 	vm.runInContext(source, host);
 	playback.pollScript = vm.runInContext('playbackPollScript', host);
-	vm.runInContext(`currentListId = '${playlistId}'; currentEntry = { waitForVideoEnd: false }; startPlaybackMonitor();`, host);
+	vm.runInContext(`currentListId = '${playlistId}'; currentEntry = { waitForVideoEnd: ${waitForVideoEnd} }; startPlaybackMonitor();`, host);
 	playback.call = (name) => vm.runInContext(`${name}()`, host);
 	playback.endFirstVideo = () => { guest.window.__ytEnded = true; };
 	playback.visitVideo = (videoId, upcoming, listId = playlistId) => {
@@ -104,9 +104,15 @@ function createPlayback() {
 		};
 		playback.slateVisible = upcoming;
 		playback.slateBackgroundImage = upcoming ? `url("https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg")` : '';
-		playback.media.currentTime = 0;
-		playback.media.ended = false;
-		playback.media.paused = upcoming;
+		playback.media = { currentTime: 0, ended: false, paused: upcoming };
+	};
+	playback.visitPage = (url) => {
+		playback.url = url;
+		playback.response = null;
+		playback.slateVisible = false;
+		playback.slateBackgroundImage = '';
+		playback.media = null;
+		guest.window = {};
 	};
 	playback.poll = async (elapsed = 1000) => {
 		now += elapsed;
@@ -117,6 +123,66 @@ function createPlayback() {
 }
 
 const tests = [
+	['a deferred quit survives multiple login steps and waits for the original video to end', async () => {
+		const playback = createPlayback(true);
+		playback.visitVideo('longVideo', false);
+		playback.sidebar = ['anotherVideo'];
+		playback.call('OnExitAfterBtnClick');
+		await playback.poll(3600000);
+		playback.call('OnChannelHourElapsed');
+		assert.deepStrictEqual(playback.ipc, []);
+		for (const url of ['https://accounts.google.com/', 'https://accounts.google.com/challenge', 'https://www.youtube.com/']) {
+			playback.visitPage(url);
+			await playback.poll(120000);
+			assert.deepStrictEqual(playback.ipc, [], 'Do not quit while the original playlist is absent');
+			assert.deepStrictEqual(playback.loads, []);
+		}
+		playback.visitVideo('longVideo', false);
+		await playback.poll();
+		playback.media.currentTime = 10;
+		await playback.poll();
+		assert.deepStrictEqual(playback.ipc, [], 'Resume waiting for the same video');
+		playback.media.ended = true;
+		await playback.poll();
+		assert.deepStrictEqual(playback.ipc, ['window-close']);
+		assert.deepStrictEqual(playback.clicks, [], 'Deferred ending takes priority over the first-video random pick');
+	}],
+	['returning to another video on the original playlist ends a deferred channel', async () => {
+		for (const quit of [false, true]) {
+			const playback = createPlayback(true);
+			playback.visitVideo('longVideo', false);
+			if (quit) playback.call('OnExitAfterBtnClick');
+			await playback.poll(3600000);
+			playback.call('OnChannelHourElapsed');
+			playback.visitPage('https://accounts.google.com/');
+			await playback.poll();
+			playback.visitVideo('otherVideo', false, 'manualPlaylist');
+			await playback.poll(120000);
+			assert.deepStrictEqual(playback.ipc, []);
+			assert.deepStrictEqual(playback.loads, [], 'Another playlist does not complete the deferred channel');
+			playback.visitVideo('otherVideo', false);
+			await playback.poll();
+			assert.deepStrictEqual(playback.ipc, quit ? ['window-close'] : []);
+			assert.strictEqual(playback.loads.length, quit ? 0 : 1);
+			assert.deepStrictEqual(playback.clicks, []);
+		}
+	}],
+	['time spent logging in does not count toward the deferred playback stall timeout', async () => {
+		const playback = createPlayback(true);
+		playback.visitVideo('longVideo', false);
+		playback.call('OnExitAfterBtnClick');
+		await playback.poll(3600000);
+		playback.call('OnChannelHourElapsed');
+		playback.visitPage('https://accounts.google.com/');
+		await playback.poll(120000);
+		playback.visitVideo('longVideo', false);
+		await playback.poll();
+		await playback.poll(59000);
+		assert.deepStrictEqual(playback.ipc, []);
+		await playback.poll(1000);
+		assert.deepStrictEqual(playback.ipc, ['window-close']);
+		assert(playback.logs.some((line) => line.includes('deferred video stalled')));
+	}],
 	['retry after the offline screen appears before the sidebar', async () => {
 		const playback = createPlayback();
 		await playback.poll();

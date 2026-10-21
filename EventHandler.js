@@ -111,9 +111,9 @@ function OnBodyLoad() {
 	}, 10);
 }
 
-// Arm or disarm a quit for the end of the current channel hour. The flag is only read when the
-// RandomPlay 1-hour timer fires, so toggling it never interrupts the channel that is playing, and it
-// survives a mid-cycle RandomPlay restart (crash recovery) because RandomPlay does not reset it.
+// Arm or disarm a quit at the scheduled channel end, including a deferred video end after the hour.
+// Toggling neither interrupts playback nor resets the hour timer. The flag survives a mid-cycle
+// RandomPlay restart (crash recovery) because RandomPlay does not reset it.
 function OnExitAfterBtnClick() {
 	exitAfterCurrentChannel = !exitAfterCurrentChannel;
 	document.getElementById("exitAfterBtn").classList.toggle('active', exitAfterCurrentChannel);
@@ -324,7 +324,9 @@ function startPlaybackMonitor() {
 			lastPlaylistId = playlistId;
 			lastTime = state.time;
 
-			if (pendingSwitchVideoId !== null && (!onCycleWatch || videoId !== pendingSwitchVideoId || state.ended)) {
+			// Login can span several non-watch pages. Preserve the original pending video while away;
+			// only its end or a different video on this cycle's playlist completes the deferred channel.
+			if (pendingSwitchVideoId !== null && onCycleWatch && (videoId !== pendingSwitchVideoId || state.ended)) {
 				log(`deferred channel switch - pendingVideoId: ${pendingSwitchVideoId}, currentVideoId: ${videoId}, ended: ${state.ended}, onCycleWatch: ${onCycleWatch}`);
 				pendingSwitchVideoId = null;
 				endChannel('deferred video ended');

@@ -190,7 +190,7 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 - `monitorIntervalID` - 재생 모니터(`startPlaybackMonitor`) 인터벌 ID. null이 아니면 이번 사이클의 모니터가 이미 시작된 것이며, 모니터 시작 1회성 가드를 겸함
 - `currentEntry` - 이번 사이클에 선택된 `{ url, waitForVideoEnd }`
 - `currentListId` - `currentEntry.url`의 `list` 파라미터. 모니터가 "이번 사이클의 재생목록 watch 페이지인가"를 판정하는 기준
-- `pendingSwitchVideoId` - 1시간 경과 후 `waitForVideoEnd`로 전환을 미룬 경우 끝나기를 기다리는 영상 id. null이면 대기 없음
+- `pendingSwitchVideoId` - 1시간 경과 후 `waitForVideoEnd`로 전환을 미룬 경우 끝나기를 기다리는 영상 id. null이면 대기 없음. 로그인 등으로 이번 재생목록을 벗어나도 원래 id를 유지하며 복귀한 영상 id와 비교
 - `lastPoll` - 모니터의 최신 폴링 결과 `{ onCycleWatch, videoId, ended }`. 1시간 타이머 발화 시 "지금 재생 중인 영상"을 판단하는 데 사용
 - `lastNavigatedUrl`, `sameUrlNavCount` - 직전 내비게이션 URL과 연속 동일 URL 횟수 (내비게이션 로깅용)
 - `exitAfterCurrentChannel` (boolean) - 현재 채널의 1시간이 끝나면 다음 채널로 넘어가지 않고 프로그램을 종료할지 여부. 타이틀바 토글 버튼으로 설정하며, `endChannel()`과 재생 모니터의 정지 분기에서 읽음
@@ -252,7 +252,7 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 - `playlistId` = watch URL의 `list` 파라미터(없으면 null), `onCycleWatch` = `playlistId`가 `currentListId`와 일치
 - **판정 범위의 비자명한 결정**: 라이브 예고 건너뛰기는 같은 재생목록 안에서 다른 영상을 고를 뿐이므로 `playlistId`만 있으면(주소창으로 직접 연 재생목록 포함) 동작. 반면 최초 영상 종료 점프, 정지 시 채널 전환, 미뤄둔 전환은 `onCycleWatch`일 때만 동작해 수동 시청 중 채널이 바뀌지 않게 함 (`onCycleWatch`가 아니면 진행 타이머도 계속 리셋)
 - 처리 순서:
-  1. **미뤄둔 전환**: `pendingSwitchVideoId`가 있고 영상 id가 바뀌었거나 `ended`이거나 `onCycleWatch`가 아니면 `endChannel('deferred video ended')`
+  1. **미뤄둔 전환**: `pendingSwitchVideoId`가 있고 `onCycleWatch`인 상태에서 영상 id가 바뀌었거나 `ended`이면 `endChannel('deferred video ended')`. 로그인 화면의 URL·문구·단계를 식별하지 않으며, 이번 재생목록의 watch 페이지 밖에서는 대기 중인 id를 유지하고 종료·채널 전환을 보류. 원래 재생목록으로 돌아오면 같은 영상은 계속 기다리고 다른 영상은 즉시 종료·채널 전환. 로그인 중 경과 시간은 60초 재생 정지 판정에 누적하지 않으며 복귀 후 다시 측정
   2. **라이브 대기/오프라인** (`playlistId` 필요, `onCycleWatch` 불필요): 감지한 id는 `upcomingVideoIds`에 추가해 사이클 내 모든 후속 선택 후보에서 제외. 클릭 성공 여부는 현재 방문의 `upcomingSkipHandled`로 관리하며, 폴링에서 영상 id 또는 재생목록 id 변경을 확인하면 이 플래그와 시도 횟수를 초기화. 재생목록 자동재생이 이미 건너뛴 대기 영상으로 돌아와도 다시 건너뛰고, 클릭 직후 내비게이션을 기다리는 동안에는 중복 클릭을 막기 위한 분리. 제외 목록은 방문이 바뀌어도 유지해 여러 대기 영상을 서로 다시 선택하지 않도록 함. `clickRandomFrontVideo(20, 감지한 id 전체, 시도 횟수)`가 빈 목록·제외된 후보만 있는 목록·실행 오류로 클릭하지 못하면 다음 폴링에서 재시도. 감지 로그와 진행 타이머 초기화는 방문별 첫 시도에만 수행하며, 재방문은 `revisit: true`를 함께 기록. 재시도는 정지 타이머를 연장하지 않으므로 계속 실패하면 아래 정지/종료 예약 분기로 진행. 종료 예약 중에도 같은 재생목록 안의 대기 영상 건너뛰기는 동작. `list`가 없는 단일 영상은 고를 대상이 없어 제외
   - 이후 3, 4는 `onCycleWatch`일 때만
   3. **최초 영상 종료**: 사이클당 1회 `clickRandomFrontVideo(20, 예고 id 전체)` (앞 5%). 라이브 대기/오프라인으로 판정된 동안에는 처리하지 않아 이전 영상의 sticky 종료 플래그가 건너뛰기 재시도와 중복 클릭을 일으키지 않도록 함
@@ -319,8 +319,9 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 ### tests/playback-monitor.test.js
 **역할**: Electron 실행 없이 실제 `EventHandler.js`와 게스트 주입 스크립트를 함께 검증하는 회귀 테스트. `node tests/playback-monitor.test.js`로 실행하며 추가 패키지가 필요하지 않음. 선택적으로 소스 파일 경로를 인자로 받아 수정 전 코드에서도 같은 실패가 재현되는지 확인 가능
 
-- `createPlayback()` - 호스트/게스트를 별도 Node VM 컨텍스트에서 실행하고 시간, 사이드바 준비 시점, 플레이어 응답, 클릭 실패를 제어. 가상 영상 id와 모의 DOM을 사용하며 별도 테스트 데이터 파일이 필요하지 않음. 반환 객체의 `visitVideo(videoId, upcoming, listId)`는 URL·플레이어 응답·슬레이트·미디어 상태를 함께 바꿔 영상/재생목록 전환과 재방문을 재현. 내비게이션·클릭·IPC·로그를 수집하여 비동기 폴링 결과를 확인. 실제 Chromium 렌더링과 YouTube 네트워크 동작은 검증하지 않음
+- `createPlayback(waitForVideoEnd)` - 호스트/게스트를 별도 Node VM 컨텍스트에서 실행하고 시간, 사이드바 준비 시점, 플레이어 응답, 클릭 실패와 영상 종료 대기 설정을 제어. 가상 영상 id와 모의 DOM을 사용하며 별도 테스트 데이터 파일이 필요하지 않음. 반환 객체의 `visitVideo(videoId, upcoming, listId)`는 URL·플레이어 응답·슬레이트·미디어 상태를 함께 바꿔 영상/재생목록 전환과 재방문을 재현. `visitPage(url)`는 플레이어가 없는 새 페이지로 이동해 여러 단계 로그인과 복귀를 재현. 내비게이션·클릭·IPC·로그를 수집하여 비동기 폴링 결과를 확인. 실제 Chromium 렌더링과 YouTube 네트워크 동작은 검증하지 않음
 - 테스트 실행부 - 목록 표시 지연 후 재시도, 이전 영상 응답에 의한 오탐 방지, 응답 없는 슬레이트 감지, 숨겨진 슬레이트 무시, 대기 영상 누적 제외, 실행 실패 재시도, 60초 정지 및 로그 제한, 종료 예약, 수동 재생목록, 최초 종료 플래그와의 중복 클릭 방지를 순차 검증. 응답/슬레이트의 갱신 순서가 다른 두 전환 상황, 종료 예약 중 예약 영상 재방문 시 재처리, 다른 재생목록에서 같은 대기 영상 재처리, 재방문 후에도 누적 제외 목록 유지도 검증. 단언 실패 시 종료 코드 1
+- 1시간 이후 종료 대기 중 여러 로그인 단계·다른 재생목록에서는 대기를 유지하고, 원래 영상으로 복귀하면 실제 종료까지 기다리며, 원래 재생목록의 다른 영상으로 복귀하면 예약 여부에 따라 종료 또는 채널 전환하는지 검증. 로그인 시간이 정지 판정에 포함되지 않는지와 미뤄둔 종료가 최초 영상 랜덤 클릭보다 우선하는지도 검증
 
 ### tests/window-diagnostics.test.js
 **역할**: `node tests/window-diagnostics.test.js`로 진단 보조 프로세스의 지연·실패가 앱의 창 동작에 영향을 주지 않는지 검증. 별도 테스트 데이터 파일은 사용하지 않음
