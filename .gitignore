@@ -104,6 +104,7 @@ dist
 .tern-port
 
 # Project-specific
+/WindowDiagnostics.exe
 git-config.bat
 commit-msg.bat
 channel_record.json

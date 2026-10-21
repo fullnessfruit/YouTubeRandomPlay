@@ -1,13 +1,13 @@
-$ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-
-# A persistent, read-only Win32 bridge; stdin EOF also shuts it down after a host crash.
-Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Web.Script.Serialization;
+
+[assembly: System.Reflection.AssemblyTitle("YouTubeRandomPlay Window Diagnostics")]
+[assembly: System.Reflection.AssemblyDescription("Read-only local window state for PIP diagnostics and recovery")]
 
 public class YtrpWindowInfo {
     public string hwnd, processName, className;
@@ -110,15 +110,30 @@ public static class YtrpWindowProbe {
         return snapshot;
     }
 }
-'@
 
-# Requests contain only a decimal HWND. Each reply is one JSON line; no window titles are read.
-while ($null -ne ($windowHandleLine = [Console]::ReadLine())) {
-    try {
-        $state = [YtrpWindowProbe]::Capture([long]::Parse($windowHandleLine))
-        $reply = @{ sampledAt = [DateTime]::UtcNow.ToString('o'); state = $state }
-    } catch {
-        $reply = @{ error = $_.Exception.Message }
+public static class YtrpWindowDiagnostics {
+    // This executable is compiled before deployment. It only reads window state and stdin.
+    public static int Main() {
+        Console.OutputEncoding = new UTF8Encoding(false);
+        var serializer = new JavaScriptSerializer();
+        try {
+            string line;
+            while ((line = Console.ReadLine()) != null) {
+                var reply = new Dictionary<string, object>();
+                try {
+                    var state = YtrpWindowProbe.Capture(long.Parse(line));
+                    reply["sampledAt"] = DateTime.UtcNow.ToString("o");
+                    reply["state"] = state;
+                } catch (Exception error) {
+                    reply["error"] = error.Message;
+                }
+                // Public fields retain the existing JSON names, including null and false values.
+                Console.WriteLine(serializer.Serialize(reply));
+            }
+            return 0;
+        } catch (IOException) {
+            // The parent can close the pipe while a sample is being written.
+            return 1;
+        }
     }
-    [Console]::WriteLine(($reply | ConvertTo-Json -Depth 6 -Compress))
 }

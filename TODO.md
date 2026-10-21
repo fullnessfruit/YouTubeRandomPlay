@@ -18,6 +18,8 @@
 - 앱 재시작 후 최상위 유지/라이브 예고 건너뛰기/재생 정지 시 채널 전환/초기 크기 86x234/종료 예약 중 정지 시 대기 동작 확인 (debug.log의 `upcoming live detected`, `playback stalled`, `channel switch deferred`, `holding until scheduled quit` 확인)
 
 ## 지시(진행 중)
+- PIP 창 진단과 조건부 최상위 복구를 유지하면서 실행 중 PowerShell·C# 동적 컴파일을 제거한다.
+  - 다음 한 수: Windows에서 build-window-diagnostics.bat로 보조 EXE를 빌드하고 실제 JSON 통신을 검증한다.
 
 
 ## 나중에 할 것

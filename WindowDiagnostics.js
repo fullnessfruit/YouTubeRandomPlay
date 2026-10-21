@@ -1,5 +1,4 @@
 const { spawn } = require('child_process');
-const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 
@@ -63,7 +62,7 @@ function startWindowDiagnostics(window, getIsPip, log, onNativeState = null) {
       record(reason);
       return;
     }
-    // Keep one query in flight, including while PowerShell compiles the Win32 declarations.
+    // Keep one query in flight, including while the prebuilt helper starts.
     if (pending) return;
     pending = { reason, requestedAt: Date.now() };
     queryTimeout = setTimeout(() => failNative('query timed out'), QUERY_TIMEOUT_MS);
@@ -86,11 +85,12 @@ function startWindowDiagnostics(window, getIsPip, log, onNativeState = null) {
     try {
       const buffer = window.getNativeWindowHandle();
       handle = buffer.length === 8 ? buffer.readBigUInt64LE().toString() : buffer.readUInt32LE().toString();
-      const script = fs.readFileSync(path.join(__dirname, 'WindowDiagnostics.ps1'), 'utf8');
-      const executable = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-      helper = spawn(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand',
-        Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-      helper.on('error', (error) => failNative(error.message));
+      // Build the reviewed source separately; runtime never starts a shell or compiler.
+      const executable = path.join(__dirname, 'WindowDiagnostics.exe');
+      helper = spawn(executable, [], { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      helper.on('error', (error) => failNative(error.code === 'ENOENT'
+        ? `${error.message}; build WindowDiagnostics.exe with build-window-diagnostics.bat before starting the app`
+        : error.message));
       helper.on('close', (code, signal) => failNative(`helper exited - code: ${code}, signal: ${signal}`));
       helper.stdin.on('error', (error) => failNative(error.message));
       helper.stderr.setEncoding('utf8');

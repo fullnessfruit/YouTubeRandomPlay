@@ -55,7 +55,8 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 
 ### 메인 프로세스
 - `main.js` - Electron 윈도우 생성, 캐시 관리
-- `WindowDiagnostics.js`, `WindowDiagnostics.ps1` - 창 가림 원인 분석용 Electron/Win32 상태 수집
+- `WindowDiagnostics.js`, `WindowDiagnostics.cs` - 창 가림 원인 분석용 Electron/Win32 상태 수집. C# 소스는 배포 전에 `WindowDiagnostics.exe`로 빌드
+- `build-window-diagnostics.bat` - Windows에서 진단 보조 실행 파일을 명시적으로 빌드하는 개발/배포 도구
 
 ### 렌더러 프로세스
 - `index.html` - UI (주소창 + webview)
@@ -135,11 +136,11 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 
 `startWindowDiagnostics(window, getIsPip, log, onNativeState)`
 - `getIsPip` 콜백으로 앱의 모드 의도를 읽으며, `focus`/`blur`, 표시/숨김, 최소화/복원, 최대화/복원, 이동/리사이즈 완료, 전체화면, 최상위 변경 이벤트에 `window diagnostic` 기록. `always-on-top-changed`의 이벤트 인자도 reason에 남겨 이후 복구된 상태와 구분
-- Windows에서는 숨겨진 PowerShell 보조 프로세스를 창당 하나만 유지. 고정된 `WindowDiagnostics.ps1` 내용을 UTF-16LE `EncodedCommand`로 전달해 인용 부호 손상을 피하고, stdin으로 32/64비트 HWND를 10진 문자열로 전달. 보조 프로세스는 JSON 한 줄로 응답하며 추가 네이티브 패키지가 필요하지 않음
+- Windows에서는 사전 빌드한 `WindowDiagnostics.exe`를 절대 경로로 직접 실행(`shell: false`, 추가 인자 없음)하고 창당 하나만 유지. stdin으로 32/64비트 HWND를 10진 문자열로 전달하고 JSON 한 줄로 응답받음. 빌드와 실행을 분리해 앱 실행 중 PowerShell·인코딩한 스크립트·C# 컴파일러를 실행하지 않으며, 보조 EXE가 없거나 실패해도 런타임 컴파일이나 다른 실행 방식으로 폴백하지 않음
 - 1초마다 비동기 조회하며 응답을 기다리는 동안 다음 요청은 생략. Electron이 이미 비활성 상태여도 다른 창이 위로 올라오는 변화를 포착하기 위한 폴링. 동일 상태는 60초마다 생존 확인용으로만 기록하며, 상태 변경과 Electron 이벤트는 즉시 기록
 - `record()` - `electron`에 isPip/alwaysOnTop/포커스/표시/최소화/최대화/전체화면/bounds, `native`에 Win32 조회 결과를 같은 줄로 기록. `nativeSampledAt`과 `queryMs`로 비동기 조회 시차를 드러냄. Electron 이벤트만 기록한 줄은 `native: null`이며 이전 네이티브 결과를 현재 값처럼 재사용하지 않음
 - `onNativeState`(선택) - 성공한 모든 네이티브 응답을 기록 처리 후 전달. 동일 상태여서 로그를 생략해도 전달은 계속해 복구 재판정을 허용. 콜백 예외는 `ERROR window diagnostic native handler failed`로 격리하며 정상 네이티브 조회를 unavailable로 바꾸지 않음
-- `sample()` - 요청 직전에 HWND 전송과 15초 제한 시간을 설정. `failNative()`는 실행·통신·응답 오류 또는 시간 초과를 `WARN window diagnostic native unavailable` 한 줄로 남기고 보조 프로세스만 정지. 이때 nativeStatus는 unavailable이고 Electron 상태 로그는 계속 기록하며 반복 재실행하지 않음. Windows 외에는 unsupported로 기록
+- `sample()` - 요청 직전에 HWND 전송과 15초 제한 시간을 설정. `failNative()`는 실행·통신·응답 오류 또는 시간 초과를 `WARN window diagnostic native unavailable` 한 줄로 남기고 보조 프로세스만 정지. 이때 nativeStatus는 unavailable이고 Electron 상태 로그는 계속 기록하며 반복 재실행하지 않음. EXE가 없으면 `build-window-diagnostics.bat` 실행이 필요하다는 메시지를 남김. Windows 외에는 unsupported로 기록
 - `stopNative()` - 응답 대기/스트림/보조 프로세스 정리. 창 `closed` 시 전체 폴링과 이벤트 리스너도 정리하며 `window diagnostic stopped` 기록
 
 **로그 해석**
@@ -147,14 +148,21 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 - `native.foreground`는 현재 활성 창. `overlapCandidatesAbove`는 우리 창보다 위에 있으면서 사각형 영역이 겹치는 창의 HWND/PID/프로그램명/클래스/최상위 상태/표시 상태/최소화 상태/cloaked/bounds. 메인 로그 PID와 후보 PID를 비교해 다른 실행 인스턴스와 외부 앱을 구분
 - 겹침은 실제 픽셀 가림의 확정 판정이 아님. 투명 창·비직사각형 영역·보이지 않는 리사이즈 테두리를 고려하지 않으며, 1초보다 짧은 변화나 조회 중 순서 변경은 놓칠 수 있음. Electron bounds는 DIP, 네이티브 bounds는 보조 프로세스의 `GetWindowRect` 좌표이므로 두 좌표를 직접 비교하지 않음
 
-### WindowDiagnostics.ps1
-**역할**: `Add-Type`으로 Win32 조회만 수행하는 C# 브리지를 한 번 로드하고, stdin의 HWND 요청마다 상태를 반환. 창 제목이나 화면 내용은 수집하지 않음
+### WindowDiagnostics.cs
+**역할**: 배포 전에 .NET Framework 실행 파일로 컴파일하는 Win32 조회 전용 보조 프로그램. stdin의 HWND 요청마다 상태를 반환하며 창 제목이나 화면 내용은 수집하지 않음. 조회 API를 호출하는 P/Invoke 선언은 컴파일된 어셈블리에 포함되며, 실행 시 소스 컴파일·외부 명령 실행·네트워크 전송·예약 작업 등록을 수행하지 않음
 
 - `YtrpWindowInfo` / `YtrpWindowSnapshot` - 개별 창 상태와 우리 창·활성 창·위쪽 겹침 후보를 직렬화하는 자료형
 - `YtrpWindowProbe.Read(hwnd, identify)` - `GetWindowLongW(GWL_EXSTYLE)`의 `WS_EX_TOPMOST`를 실제 최상위 상태로 읽음. 마지막 오류를 초기화해 값 0과 API 실패를 구분하고 실패 시 topmost=null/styleError를 반환. 유효하지 않거나 사라진 HWND는 null. `IsWindowVisible`, `IsIconic`, `GetWindowRect`, `DwmGetWindowAttribute(DWMWA_CLOAKED)`도 읽음
 - `Identify()` - PID, 프로그램명, 윈도우 클래스를 조회. 권한 부족이나 프로세스 종료로 이름을 읽지 못하면 이름만 null로 남김
 - `Capture()` - 우리 창과 활성 창을 읽고 `GetWindow(GW_HWNDPREV)`로 위쪽 창을 순회. 표시 중이고 최소화·cloaked 상태가 아닌 겹침 후보만 포함하며, cloaked 조회 실패(null)는 후보에서 배제하지 않음. 최대 5개 상세 정보와 전체 발견 수(overlapCount)를 반환. 탐색은 256개 핸들/중복 방문에서 중단하고 scanTruncated로 표시해 창의 동시 종료·재배치로 무한 순회하지 않도록 함
-- 요청 루프 - 한 요청의 결과 또는 오류를 UTF-8 JSON 한 줄로 반환. 호스트 종료로 stdin이 닫히면 루프도 종료
+- `YtrpWindowDiagnostics.Main()` - 한 요청의 결과 또는 오류를 UTF-8 JSON 한 줄로 반환. .NET Framework의 `JavaScriptSerializer`로 public 필드와 nullable 값을 직렬화해 `sampledAt`/`state`/`error`와 기존 창 상태 필드명을 유지. 잘못된 HWND 문자열은 오류 응답 후 다음 요청을 처리. 호스트 종료로 stdin이 닫히면 정상 종료하며, 파이프 I/O 실패 시 종료 코드 1을 반환
+
+### build-window-diagnostics.bat
+**역할**: 앱 실행과 별개인 명시적 빌드 단계. Windows에 설치된 .NET Framework 4의 `csc.exe`로 `WindowDiagnostics.cs`를 AnyCPU 콘솔 프로그램 `WindowDiagnostics.exe`로 컴파일하며 `System.Web.Extensions.dll`을 참조. Framework64를 먼저 확인하고 없으면 Framework를 사용
+
+- 모든 앱 인스턴스를 종료한 상태에서 실행. 빌드 실패는 종료 코드 1로 알리며, 실행 중인 보조 EXE를 강제 종료하거나 삭제하지 않음
+- 배포 시 `WindowDiagnostics.exe`를 `WindowDiagnostics.js`와 같은 디렉터리에 함께 배치해야 조건부 최상위 복구가 동작. 소스만 받았다면 앱 시작 전에 빌드해야 하며, 생성 EXE는 `.gitignore`로 제외
+- C# 소스 수정 후 다시 빌드. 앱은 이 배치 파일이나 컴파일러를 자동 실행하지 않음
 
 ---
 
@@ -318,7 +326,12 @@ YouTube 재생목록을 자동으로 순환 재생하는 Electron 데스크톱 �
 **역할**: `node tests/window-diagnostics.test.js`로 진단 보조 프로세스의 지연·실패가 앱의 창 동작에 영향을 주지 않는지 검증. 별도 테스트 데이터 파일은 사용하지 않음
 
 - `createHarness()` - 실제 `WindowDiagnostics.js`를 VM에서 실행하고 창/시간/프로세스를 제어하되 Node 스트림과 readline은 실제 구현을 사용. 창 상태 변경 API 호출은 테스트 실패로 처리
-- 테스트 실행부 - Electron 이벤트 없는 네이티브 상태 변화, 동일 상태 로그 제한/60초 생존 확인, 느린 보조 프로세스의 요청 누적 방지, 분할 UTF-8 응답, 오류 한 줄 기록, 프로세스 시작 실패, 창 종료 정리, Windows 외 실행을 검증. 로그 생략 시에도 복구 콜백 호출, 콜백 예외와 조회 실패의 분리도 검증. Windows API와 PowerShell 실행 자체는 모의 응답으로 대체하므로 실제 Windows 조회는 앱 실행 시 로그로 확인해야 함
+- 테스트 실행부 - 고정 EXE를 인자·셸 없이 직접 실행하고 재사용하는지, EXE 누락 시 빌드 안내와 함께 조회를 중단하는지 검증. Electron 이벤트 없는 네이티브 상태 변화, 동일 상태 로그 제한/60초 생존 확인, 느린 보조 프로세스의 요청 누적 방지, 분할 UTF-8 응답, 오류 한 줄 기록, 프로세스 시작 실패, 창 종료 정리, Windows 외 실행을 검증. 로그 생략 시에도 복구 콜백 호출, 콜백 예외와 조회 실패의 분리도 검증. Windows API와 보조 EXE 실행 자체는 모의 응답으로 대체
+
+### tests/window-diagnostics-helper.test.js
+**역할**: Windows에서 사전 빌드한 실제 보조 EXE의 JSON 통신과 종료를 `node tests/window-diagnostics-helper.test.js`로 검증. Windows 외 환경은 SKIP을 출력하며 성공 검증으로 간주하지 않음
+
+- HWND 0과 잘못된 문자열을 순서대로 보내 null·false·배열·숫자 등 호스트가 사용하는 자료형, UTC 타임스탬프, 오류 후 계속 처리, stdin EOF 시 정상 종료를 확인. 활성 창이 있으면 실제 Win32 조회 결과의 JSON 필드도 검증하되 창을 조작하거나 결과를 파일에 저장하지 않음. 실제 PIP 화면 순서와 깜빡임은 별도 앱 실행 확인이 필요
 
 ### tests/pip-topmost.test.js
 **역할**: `node tests/pip-topmost.test.js`로 조건부 최상위 복구와 기존 PIP 이벤트 처리의 상호작용을 검증

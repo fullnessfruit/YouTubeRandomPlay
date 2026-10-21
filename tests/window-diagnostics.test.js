@@ -76,6 +76,21 @@ const nativeState = (topmost = true) => ({
 });
 
 const tests = [
+  ['start the prebuilt helper directly without a shell, script or runtime compiler', () => {
+    const h = createHarness();
+    assert.strictEqual(h.spawns.length, 1);
+    const [executable, args, options] = h.spawns[0];
+    assert.strictEqual(executable, path.join(path.dirname(sourcePath), 'WindowDiagnostics.exe'));
+    assert.deepStrictEqual(Array.from(args), []);
+    assert.strictEqual(options.shell, false);
+    assert.strictEqual(options.windowsHide, true);
+    assert.deepStrictEqual(Array.from(options.stdio), ['pipe', 'pipe', 'pipe']);
+    h.reply(nativeState());
+    h.tick();
+    h.reply(nativeState());
+    assert.strictEqual(h.spawns.length, 1, 'Reuse the same helper across samples');
+    h.window.emit('closed');
+  }],
   ['every native sample reaches recovery even when its diagnostic log is suppressed', () => {
     const samples = [];
     const h = createHarness('win32', false, (state) => samples.push(state));
@@ -164,11 +179,21 @@ const tests = [
     h.child.stdin.emit('error', new Error('closed'));
     assert(!h.logs.some((line) => line.includes('native unavailable')));
   }],
-  ['missing PowerShell does not prevent window diagnostics from starting', () => {
+  ['a helper spawn failure does not prevent Electron diagnostics from starting', () => {
     const h = createHarness('win32', true);
     h.window.emit('focus');
     assert(h.logs.some((line) => line.includes('spawn failed')));
     assert(h.logs[h.logs.length - 1].includes('reason: focus'));
+    h.window.emit('closed');
+  }],
+  ['a missing helper reports the build step without compiling or starting another process', () => {
+    const h = createHarness();
+    const error = new Error('helper not found');
+    error.code = 'ENOENT';
+    h.child.emit('error', error);
+    h.tick();
+    assert(h.logs.some((line) => line.includes('build-window-diagnostics.bat')));
+    assert.strictEqual(h.spawns.length, 1);
     h.window.emit('closed');
   }],
   ['non-Windows platforms use Electron diagnostics without a helper', () => {
